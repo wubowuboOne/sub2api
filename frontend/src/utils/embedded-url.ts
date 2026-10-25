@@ -10,12 +10,14 @@ const EMBEDDED_UI_MODE_QUERY_KEY = 'ui_mode'
 const EMBEDDED_UI_MODE_VALUE = 'embedded'
 const EMBEDDED_SRC_HOST_QUERY_KEY = 'src_host'
 const EMBEDDED_SRC_QUERY_KEY = 'src_url'
+const TOKEN_QUERY_KEY = 'token'
 
 export function buildEmbeddedUrl(
   baseUrl: string,
   userId?: number,
   theme: 'light' | 'dark' = 'light',
   lang?: string,
+  token?: string | null,
 ): string {
   if (!baseUrl) return baseUrl
   try {
@@ -25,7 +27,8 @@ export function buildEmbeddedUrl(
     }
     // This key was previously reserved for the main application's bearer JWT.
     // Remove stale copies as well as stopping automatic credential injection.
-    url.searchParams.delete('token')
+    url.searchParams.delete(TOKEN_QUERY_KEY)
+    if (token) url.searchParams.set(TOKEN_QUERY_KEY, token)
     url.searchParams.set(EMBEDDED_THEME_QUERY_KEY, theme)
     if (lang) {
       url.searchParams.set(EMBEDDED_LANG_QUERY_KEY, lang)

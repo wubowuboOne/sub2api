@@ -250,6 +250,7 @@ const embeddedUrl = computed(() => {
     authStore.user?.id,
     pageTheme.value,
     locale.value,
+    authStore.token,
   )
 })
 

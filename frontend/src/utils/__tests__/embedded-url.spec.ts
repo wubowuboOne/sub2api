@@ -68,6 +68,14 @@ describe('embedded-url', () => {
     expect(url.hash).toBe('#section')
   })
 
+  it('forwards the current token to every embedded page and replaces stale tokens', () => {
+    const token = 'main-app-jwt'
+    const embedded = buildEmbeddedUrl('https://docs.example.com/guide?token=stale-jwt', 42, 'light', 'zh-CN', token)
+
+    expect(new URL(embedded).searchParams.get('token')).toBe(token)
+    expect(embedded).not.toContain('stale-jwt')
+  })
+
   it('never copies source query or fragment credentials into the embedded URL', () => {
     window.location.href = 'https://app.example.com/custom/docs?access_token=query-jwt&code=oauth-code#token=fragment-jwt'
     const result = buildEmbeddedUrl('https://docs.example.com/guide', 42, 'dark', 'en')
