@@ -115,6 +115,9 @@
             </template>
           </section>
         </fieldset>
+        <p v-if="reuseSourceLabel" class="template-hint" data-testid="quality-draft-source">{{ t('qualityOps.draftSource') }}: {{ reuseSourceLabel }} · {{ t('qualityOps.draftNotSaved') }}</p>
+        <p v-if="editing && reuseEditingPlan" data-testid="quality-saved-models">{{ t('qualityOps.savedModels') }}: {{ ruleModels(reuseEditingPlan).join(', ') }} · {{ t('qualityOps.nameIsLabel') }}</p>
+        <QualityOwnershipReview v-if="editing" :plan-id="editing" :draft-action="form.pelican_config.quality.action" :draft-models="[form.model_id, ...form.pelican_config.model_ids]" :draft-group-ids="form.pelican_config.quality.remove_group_ids" @blocked="ownershipBlocked = $event" @reconciled="store.refreshRules(true)" />
         <label v-if="!bulkEditing && !savingPreset" class="block space-y-1"><span>{{ t('qualityOps.ruleName') }}</span><input v-model.trim="form.pelican_config.rule_name" maxlength="100" class="input" data-testid="quality-rule-name-input" /></label>
         <p v-if="editingTemplate" class="template-hint" data-testid="quality-template-edit-hint">{{ t('qualityOps.templateEditHint', { count: editingTemplateRecord?.plan_ids.length ?? 0 }) }}</p>
         <p v-else-if="editing && planTemplate[editing]" class="template-hint" data-testid="quality-plan-template-hint">{{ t('qualityOps.planFromTemplate', { id: planTemplate[editing] }) }}</p>
@@ -157,7 +160,14 @@
         </template>
         <fieldset class="space-y-3 rounded-lg border p-4 dark:border-dark-600">
           <legend class="px-2 font-medium">{{ t('qualityOps.judgeTitle') }}</legend>
-          <div class="grid gap-4 sm:grid-cols-2">
+          <label class="block space-y-1"><span>{{ t('qualityOps.judgeKind') }}</span>
+            <select :value="form.pelican_config.quality.judge.kind || 'llm'" class="input" data-testid="quality-judge-kind" @change="selectJudgeKind">
+              <option value="llm">{{ t('qualityOps.judgeLLM') }}</option>
+              <option value="jev">{{ t('qualityOps.judgeJev') }}</option>
+            </select>
+          </label>
+          <p v-if="form.pelican_config.quality.judge.kind === 'jev'" class="text-sm text-gray-500" data-testid="quality-jev-hint">{{ t('qualityOps.judgeJevHint') }}</p>
+          <div v-else class="grid gap-4 sm:grid-cols-2">
             <label class="space-y-1"><span>{{ t('qualityOps.judgeGroup') }}</span>
               <select v-model.number="form.pelican_config.quality.judge.group_id" required class="input" @change="loadJudgeModels">
                 <option disabled :value="0">{{ t('qualityOps.selectJudgeGroup') }}</option>
@@ -170,7 +180,7 @@
             </label>
           </div>
           <label class="block space-y-1"><span>{{ t('qualityOps.judgePrompt') }}</span><textarea v-model="form.pelican_config.quality.judge.prompt" required maxlength="16000" rows="3" class="input text-sm" /></label>
-          <p class="text-sm text-gray-500">{{ t('qualityOps.grading') }}</p>
+          <p class="text-sm text-gray-500">{{ t(form.pelican_config.quality.judge.kind === 'jev' ? 'qualityOps.jevGrading' : 'qualityOps.grading') }}</p>
         </fieldset>
         </template>
         <fieldset v-if="editsField('action') && form.pelican_config.test_channel !== 'bps'" class="space-y-3 rounded-lg border p-4 dark:border-dark-600">
@@ -203,13 +213,13 @@
         <label v-if="copying || savingPreset || (!!reuseSourceLabel && !bulkEditing)" class="block space-y-1"><span>{{ t('qualityOps.maxResults') }}</span><input v-model.number="form.max_results" type="number" min="1" max="200" required class="input" data-testid="quality-copy-max-results" /></label>
         <label v-if="editsField('enabled')" class="flex items-center gap-2"><input v-model="form.enabled" type="checkbox" data-testid="quality-rule-enabled" />{{ t('qualityOps.enabled') }}</label>
       </fieldset></form>
-      <template #footer><div class="editor-footer"><button v-if="editing || bulkEditing" type="button" class="delete-rule" data-testid="quality-editor-delete" :disabled="busy || selectingAccounts || (bulkEditing && !bulkRuleIds.length)" @click="requestDelete(bulkEditing ? bulkRuleIds : editing ? [editing] : [])">{{ bulkEditing ? t('qualityOps.bulkDelete') : t('qualityOps.delete') }}</button><button v-else-if="editingTemplate" type="button" class="delete-rule" :disabled="busy" data-testid="quality-delete-template" @click="openTemplateDelete">{{ t('qualityOps.deleteTemplate') }}</button><span class="flex-1" /><button class="btn btn-secondary" :disabled="busy" @click="closeForm">{{ t('qualityOps.cancel') }}</button><button form="quality-rule-form" type="submit" class="btn btn-primary" :disabled="busy || selectingAccounts || (bulkEditing ? !bulkFields.length || !bulkRuleIds.length || (!!reuseSourceLabel && !reuseConfirmed) : !savingPreset && !editing && !editingTemplate && accountScope !== 'all' && !selectedAccounts.length)">{{ busy ? t('qualityOps.saving') : savingPreset ? t('qualityOps.savePreset') : bulkEditing ? t('qualityOps.applyToRules', { count: bulkRuleIds.length }) : t('qualityOps.save') }}</button></div></template>
+      <template #footer><div class="editor-footer"><button v-if="editing || bulkEditing" type="button" class="delete-rule" data-testid="quality-editor-delete" :disabled="busy || selectingAccounts || (bulkEditing && !bulkRuleIds.length)" @click="requestDelete(bulkEditing ? bulkRuleIds : editing ? [editing] : [])">{{ bulkEditing ? t('qualityOps.bulkDelete') : t('qualityOps.delete') }}</button><button v-else-if="editingTemplate" type="button" class="delete-rule" :disabled="busy" data-testid="quality-delete-template" @click="openTemplateDelete">{{ t('qualityOps.deleteTemplate') }}</button><span class="flex-1" /><button class="btn btn-secondary" :disabled="busy" @click="closeForm">{{ t('qualityOps.cancel') }}</button><button form="quality-rule-form" type="submit" class="btn btn-primary" :disabled="busy || selectingAccounts || (!!editing && ownershipBlocked) || (bulkEditing ? !bulkFields.length || !bulkRuleIds.length || (!!reuseSourceLabel && !reuseConfirmed) : !savingPreset && !editing && !editingTemplate && accountScope !== 'all' && !selectedAccounts.length)">{{ busy ? t('qualityOps.saving') : savingPreset ? t('qualityOps.savePreset') : bulkEditing ? t('qualityOps.applyToRules', { count: bulkRuleIds.length }) : t('qualityOps.save') }}</button></div></template>
     </BaseDialog>
     <BaseDialog :show="!!historyPlan" :title="detailOperation ? t('qualityOps.roundDetail') : t('qualityOps.history')" placement="right" width="extra-wide" close-on-click-outside @close="closeDetails">
       <template v-if="historyPlan">
         <div class="detail-heading"><span class="account-avatar">{{ detailAccountName.slice(0, 1) }}</span><div><h3>{{ detailAccountName }}</h3><p>{{ t('qualityOps.rule') }} {{ historyPlan.id }}<span class="mx-2">·</span>{{ detailOperation ? date(detailOperation.started_at) : t('qualityOps.historyHelp') }}</p></div><a class="account-management-link" href="/admin/accounts">{{ t('qualityOps.manageAccount') }}<Icon name="externalLink" size="xs" /></a></div>
         <div v-if="detailOperation" class="round-overview"><div><span>{{ t('qualityOps.testResult') }}</span><strong :class="allPassed(detailOperation) ? 'text-emerald-600' : 'text-rose-600'">{{ detailOperation.passed_count }} / {{ detailOperation.total_count }} {{ t('qualityOps.passed') }}</strong><span v-if="detailOperation.skipped_count">{{ t('qualityOps.skippedCount', { n: detailOperation.skipped_count }) }}</span></div><div><span>{{ t('qualityOps.accountAction') }}</span><strong>{{ operationLabel(detailOperation) }}</strong></div></div>
-        <aside v-if="detailAction === 'restore_conflict'" class="conflict-explanation" role="note"><Icon name="exclamationTriangle" size="md" /><div v-if="detailRestoreDiagnostic" data-testid="quality-restore-diagnostic"><h4>{{ t('qualityOps.restoreDiagnosticTitle') }}</h4><p>{{ restoreDiagnosticReason }}</p><p v-if="detailRestoreDiagnostic.disposition === 'external_membership_present'">{{ t('qualityOps.externalMembershipHelp') }}</p><p v-if="detailRestoreDiagnostic.scope === 'isolate_models'">{{ t('qualityOps.isolationRestoreRolledBack') }}</p><details class="conflict-causes"><summary>{{ t('qualityOps.restoreDiagnosticEvidence') }}</summary><pre class="whitespace-pre-wrap break-words text-xs">{{ JSON.stringify(detailRestoreDiagnostic, null, 2) }}</pre></details><strong>{{ t('qualityOps.restoreDiagnosticNextStep') }}</strong></div><div v-else-if="detailBPS"><h4>{{ t('qualityOps.conflictTitle') }}</h4><p>{{ t('qualityOps.bpsConflictExplanation') }}</p><details class="conflict-causes"><summary>{{ t('qualityOps.conflictChecks') }}</summary><ul><li>{{ t('qualityOps.bpsConflictOptions') }}</li><li>{{ t('qualityOps.bpsConflict403') }}</li><li>{{ t('qualityOps.bpsConflictAvailability') }}</li></ul></details><p class="conflict-limit">{{ t('qualityOps.conflictUnknown') }}</p><strong>{{ t('qualityOps.bpsConflictNextStep') }}</strong></div>
+        <aside v-if="detailAction === 'restore_conflict'" class="conflict-explanation" role="note"><Icon name="exclamationTriangle" size="md" /><div v-if="detailRestoreDiagnostic" data-testid="quality-restore-diagnostic"><h4>{{ t('qualityOps.restoreDiagnosticTitle') }}</h4><p>{{ restoreDiagnosticReason }}</p><p v-if="detailRestoreDiagnostic.disposition === 'external_membership_present'">{{ t('qualityOps.externalMembershipHelp') }}</p><p v-if="detailRestoreDiagnostic.scope === 'isolate_models'">{{ t('qualityOps.isolationRestoreRolledBack') }}</p><details class="conflict-causes"><summary>{{ t('qualityOps.restoreDiagnosticEvidence') }}</summary><pre class="whitespace-pre-wrap break-words text-xs">{{ JSON.stringify(detailRestoreDiagnostic, null, 2) }}</pre></details><strong>{{ t('qualityOps.restoreDiagnosticNextStep') }}</strong><QualityOwnershipReview v-if="historyPlan" :plan-id="historyPlan.id" @reconciled="store.refreshRules(true)" /></div><div v-else-if="detailBPS"><h4>{{ t('qualityOps.conflictTitle') }}</h4><p>{{ t('qualityOps.bpsConflictExplanation') }}</p><details class="conflict-causes"><summary>{{ t('qualityOps.conflictChecks') }}</summary><ul><li>{{ t('qualityOps.bpsConflictOptions') }}</li><li>{{ t('qualityOps.bpsConflict403') }}</li><li>{{ t('qualityOps.bpsConflictAvailability') }}</li></ul></details><p class="conflict-limit">{{ t('qualityOps.conflictUnknown') }}</p><strong>{{ t('qualityOps.bpsConflictNextStep') }}</strong></div>
           <div v-else><h4>{{ t('qualityOps.conflictTitle') }}</h4><p>{{ t('qualityOps.conflictExplanation') }}</p><details class="conflict-causes"><summary>{{ t('qualityOps.conflictChecks') }}</summary><ul><li>{{ t('qualityOps.conflictAccount') }}</li><li>{{ t('qualityOps.conflictMembership') }}</li><li>{{ t('qualityOps.conflictAvailability') }}</li></ul></details><p class="conflict-limit">{{ t('qualityOps.conflictUnknown') }}</p><strong>{{ t('qualityOps.conflictNextStep') }}</strong></div></aside>
         <div v-else-if="detailAction" class="action-explanation"><Icon name="infoCircle" size="sm" /><p>{{ actionExplanation(detailAction) }}</p></div>
         <section v-if="detailModelResults" class="model-summary">
@@ -228,19 +238,20 @@
               <div v-if="selectedResult.status !== 'skipped' && !isProbeResult(selectedResult)" class="answer-reference"><span>{{ t('qualityOps.answer') }}</span><p>{{ selectedResult.pelican_config?.quality?.expected_answer || detailOperation?.pelican_config?.quality?.expected_answer || '—' }}</p></div>
               <div class="response-heading">{{ t(selectedResult.status === 'skipped' ? 'qualityOps.skipReason' : isProbeResult(selectedResult) ? 'qualityOps.probeDetail' : 'qualityOps.actualAnswer') }}<span v-if="selectedResult.latency_ms">{{ (selectedResult.latency_ms / 1000).toFixed(1) }}s</span></div>
               <pre class="response-content">{{ resultContent(selectedResult) }}</pre>
-              <div v-if="selectedResult.quality_judgment && !isProbeResult(selectedResult)" class="judge-reason"><h5>{{ t('qualityOps.judgeReason') }}</h5><p>{{ selectedResult.quality_judgment.reason || '—' }}</p><span>{{ selectedResult.quality_judgment.model_id || '—' }} · {{ groupNames[selectedResult.quality_judgment.group_id || 0] || selectedResult.quality_judgment.group_id || '—' }}</span></div>
+              <div v-if="selectedResult.quality_judgment && !isProbeResult(selectedResult)" class="judge-reason"><h5>{{ t('qualityOps.judgeReason') }}</h5><p>{{ judgmentReason(selectedResult) }}</p><span>{{ selectedResult.quality_judgment.model_id || '—' }} · {{ selectedResult.quality_judgment.kind === 'jev' ? t('qualityOps.judgeJev') : groupNames[selectedResult.quality_judgment.group_id || 0] || selectedResult.quality_judgment.group_id || '—' }}</span><p v-if="selectedResult.quality_judgment.kind === 'jev'">{{ t('qualityOps.judgeJevLatency', { ms: selectedResult.quality_judgment.latency_ms ?? '—' }) }} · {{ selectedResult.quality_judgment.rules_version }}</p></div>
             </template><div v-else-if="!detailsError" class="panel-empty">{{ t('qualityOps.noResults') }}</div>
           </section>
         </div>
       </template>
       <template #footer><div class="detail-footer"><button class="btn btn-secondary" :disabled="operationIndex <= 0 || !detailOperation" @click="navigateOperation(-1)"><Icon name="arrowLeft" size="sm" />{{ t('qualityOps.previousRound') }}</button><span>{{ detailOperation ? `${operationIndex + 1} / ${filteredOperations.length}` : t('qualityOps.history') }}</span><button class="btn btn-secondary" :disabled="!detailOperation || operationIndex < 0 || operationIndex >= filteredOperations.length - 1" @click="navigateOperation(1)">{{ t('qualityOps.nextRound') }}<Icon name="arrowRight" size="sm" /></button></div></template>
     </BaseDialog>
-    <BaseDialog :show="!!deleteTargets.length" :title="t('qualityOps.deleteRulesTitle', { count: deleteTargets.length })" width="narrow" :close-on-escape="!deleting" :show-close-button="!deleting" @close="!deleting && (deleteTargets = [])">
+    <BaseDialog :show="!!deleteTargets.length" :title="t('qualityOps.deleteRulesTitle', { count: deleteTargets.length })" width="normal" :close-on-escape="!deleting" :show-close-button="!deleting" @close="!deleting && (deleteTargets = [])">
       <p class="text-sm text-gray-600 dark:text-gray-300">{{ deleteTargets.length > 1 ? t('qualityOps.bulkDeleteConfirm', { count: deleteTargets.length }) : t('qualityOps.deleteConfirm') }}</p>
       <ul class="mt-3 max-h-48 space-y-1 overflow-auto break-words text-sm" data-testid="quality-delete-targets"><li v-for="plan in deleteTargets" :key="plan.id">{{ name(plan) }} · {{ t('qualityOps.rule') }} #{{ plan.id }}</li></ul>
+      <div v-for="plan in deleteReviewTargets" :key="plan.id" class="mt-3" :data-delete-review="plan.id"><h4>{{ t('qualityOps.rule') }} #{{ plan.id }}</h4><QualityOwnershipReview :plan-id="plan.id" deleting :disabled="deleting" @deletable="deleteReady[plan.id] = $event" @deletion-fence="deleteFences[plan.id] = $event" @reconciled="store.refreshRules(true)" /></div>
       <p v-if="deleteProgress" class="mt-3 text-sm" role="status">{{ deleteProgress }}</p>
       <p v-if="deleteError" class="editor-error mt-3" role="alert" data-testid="quality-delete-error">{{ deleteError }}</p>
-      <template #footer><div class="flex justify-end gap-2"><button class="btn btn-secondary" :disabled="deleting" data-testid="quality-cancel-delete" @click="deleteTargets = []">{{ t('qualityOps.cancel') }}</button><button class="btn bg-red-600 text-white hover:bg-red-700" :disabled="deleting" data-testid="quality-confirm-delete" @click="confirmDelete">{{ deleting ? t('qualityOps.deleting') : t('qualityOps.delete') }}</button></div></template>
+      <template #footer><div class="flex justify-end gap-2"><button class="btn btn-secondary" :disabled="deleting" data-testid="quality-cancel-delete" @click="deleteTargets = []">{{ t('qualityOps.cancel') }}</button><button class="btn bg-red-600 text-white hover:bg-red-700" :disabled="deleting || deleteReviewTargets.some(plan => !deleteReady[plan.id])" data-testid="quality-confirm-delete" @click="confirmDelete">{{ deleting ? t('qualityOps.deleting') : t('qualityOps.delete') }}</button></div></template>
     </BaseDialog>
     <BaseDialog :show="!!templateDeleteTarget" :title="t('qualityOps.deleteTemplate')" width="narrow" :close-on-escape="!templateDeleting" @close="!templateDeleting && (templateDeleteTarget = null)">
       <p class="text-sm text-gray-600 dark:text-gray-300">{{ t('qualityOps.deleteTemplateConfirm') }}</p>
@@ -257,6 +268,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, onBeforeUnmount, ref, watch } from 'vue'
+import { useRoute } from 'vue-router'
 import { storeToRefs } from 'pinia'
 import { useI18n } from 'vue-i18n'
 import AppLayout from '@/components/layout/AppLayout.vue'
@@ -273,12 +285,13 @@ import scheduledTests from '@/api/admin/scheduledTests'
 import * as accountsAPI from '@/api/admin/accounts'
 import * as groupsAPI from '@/api/admin/groups'
 import { CANDY_PROMPT, STATE_PROBE_QUESTION, stateProbeVerdict, type StateProbeVerdict } from '@/utils/intelligenceTest'
-import { buildQualityRulePatch, copyQualityRuleConfig, qualityRuleFieldValue, qualityActionPayload, qualityUsesGroups, qualityUsesModelResults, defaultQualityBPS, qualityBPSError, qualityBPSForm, qualityRuleFields, type QualityRuleField } from '@/utils/qualityRulePatch'
+import { buildQualityRulePatch, copyQualityRuleConfig, qualityRuleFieldValue, qualityActionPayload, qualityUsesGroups, qualityUsesModelResults, defaultQualityBPS, qualityBPSError, qualityBPSForm, qualityJudgeConfigured, qualityRuleFields, type QualityRuleField } from '@/utils/qualityRulePatch'
 import { DEFAULT_STATE_PROBE_CRON } from '@/utils/intelligenceTest'
+import QualityOwnershipReview from '@/components/admin/operations/QualityOwnershipReview.vue'
 import QualityProbeSchedule from '@/components/admin/operations/QualityProbeSchedule.vue'
 import QualityModelShortcuts from '@/components/admin/operations/QualityModelShortcuts.vue'
 import { qualityAccountStatusOptions, qualityAccountTypeOptions } from '@/utils/qualityAccountFilter'
-import type { AccountListItem, QualityBPSPolicy, QualityPolicy, ScheduledTestPlan, ScheduledTestResult } from '@/types'
+import type { AccountListItem, QualityBPSPolicy, QualityJudgeConfig, QualityPolicy, ScheduledTestPlan, ScheduledTestResult } from '@/types'
 
 const { t, te } = useI18n()
 const store = useAccountQualityStore(), auth = useAuthStore()
@@ -314,6 +327,7 @@ watch([search, accountGroup, accountType, accountStatuses], invalidateAccountReq
 function showAccountPicker() { return showForm.value && !editing.value && !savingPreset.value }
 
 const selectedAccounts = ref<number[]>([]), editing = ref<number | null>(null)
+const ownershipBlocked = ref(false)
 const copying = ref(false), copySourceAccountId = ref<number | null>(null)
 const savingPreset = ref(false), presetName = ref(''), selectedPresetId = ref('')
 const sourceAccountId = ref(''), sourceRuleId = ref('')
@@ -360,6 +374,9 @@ const busy = ref(false), error = ref(''), notice = ref(''), showForm = ref(false
 watch(showAccountPicker, (show) => { if (!show) invalidateAccountRequests() }, { flush: 'sync' })
 const pending = ref<Record<number, string>>({}), deleteTargets = ref<ScheduledTestPlan[]>([]), deleting = ref(false)
 const deleteError = ref(''), deleteProgress = ref('')
+const deleteFences = ref<Record<number, string>>({})
+const deleteReady = ref<Record<number, boolean>>({}), deleteConflicts = ref<number[]>([])
+const deleteReviewTargets = computed(() => deleteTargets.value.filter(plan => plan.pelican_config?.quality?.action === 'isolate_models' || deleteConflicts.value.includes(plan.id)))
 const discardPrompt = ref(false), initialForm = ref('')
 const judgeModels = ref<string[]>([])
 let judgeModelsRequest = 0, accountRequest = 0, detailRequest = 0, answerRequest = 0
@@ -421,7 +438,7 @@ function reuseFieldSummary(rule: Pick<ScheduledTestPlan, 'model_id' | 'cron_expr
   return [t(question), t(cfg?.test_channel === 'bps' ? 'qualityOps.bpsChannel' : 'qualityOps.accountChannel'),
     `${t('qualityOps.effort')}: ${cfg?.reasoning_effort || '—'}`, `${t('qualityOps.parallel')}: ${cfg?.parallel_count || 1}`,
     cfg?.prompt, q?.expected_answer ? `${t('qualityOps.answer')}: ${q.expected_answer}` : '',
-    q?.judge && cfg?.question_kind !== 'state_probe' ? `${t('qualityOps.judgeTitle')}: #${q.judge.group_id} / ${q.judge.model_id}\n${q.judge.prompt}` : ''].filter(Boolean).join('\n')
+    q?.judge && cfg?.question_kind !== 'state_probe' ? `${t('qualityOps.judgeTitle')}: ${q.judge.kind === 'jev' ? t('qualityOps.judgeJev') : `#${q.judge.group_id} / ${q.judge.model_id}`}\n${q.judge.prompt}` : ''].filter(Boolean).join('\n')
 }
 function reusedBulkPatch(plan: ScheduledTestPlan) {
   const body = buildQualityRulePatch(plan, form.value, bulkFields.value)
@@ -557,7 +574,7 @@ const probeLabels: Record<StateProbeVerdict, string> = { healthy: 'qualityOps.pr
 function isProbePlan(plan: ScheduledTestPlan) { return plan.pelican_config?.question_kind === STATE_PROBE_QUESTION }
 function isProbeResult(result: ScheduledTestResult) { return result.pelican_config?.question_kind === STATE_PROBE_QUESTION }
 function resultLabel(result: ScheduledTestResult) {
-  if (result.status === 'skipped') return t(result.error_message === 'model_catalog_unavailable' ? 'qualityOps.catalogUnavailable' : 'qualityOps.modelUnsupportedSkipped')
+  if (result.status === 'skipped') return t(result.error_message === 'model_catalog_unavailable' ? 'qualityOps.catalogUnavailable' : result.error_message === 'model_unavailable' ? 'qualityOps.modelUnavailableSkipped' : 'qualityOps.modelUnsupportedSkipped')
   if (!result.status) return t('qualityOps.notLoaded')
   const verdict = stateProbeVerdict(result)
   if (verdict) return t(probeLabels[verdict])
@@ -576,13 +593,13 @@ function resultTone(result: ScheduledTestResult) {
   return result.status === 'success' ? 'tone-success' : 'tone-danger'
 }
 function resultContent(result: ScheduledTestResult) {
-  if (result.status === 'skipped') return t(result.error_message === 'model_catalog_unavailable' ? 'qualityOps.catalogSkipHelp' : 'qualityOps.unsupportedSkipHelp')
+  if (result.status === 'skipped') return t(result.error_message === 'model_catalog_unavailable' ? 'qualityOps.catalogSkipHelp' : result.error_message === 'model_unavailable' ? 'qualityOps.modelUnavailableSkipHelp' : 'qualityOps.unsupportedSkipHelp')
   return result.response_text || result.error_message || t('qualityOps.noAnswer')
 }
 function defaults() {
   return { model_id: 'gpt-6-astra', cron_expression: '*/30 * * * *', enabled: true, max_results: 100, auto_recover: false,
     pelican_config: { rule_name: '', question_kind: 'candy' as 'candy' | 'random_reasoning' | typeof STATE_PROBE_QUESTION, test_channel: 'account' as 'account' | 'bps', prompt: CANDY_PROMPT, reasoning_effort: 'high', parallel_count: 1, model_ids: [] as string[],
-      quality: { trigger_on_upstream_5xx: false, expected_answer: '21', action: 'remove_groups' as QualityPolicy['action'], remove_group_ids: [] as number[], remove_models: [] as string[], recovery_concurrency: 5, auto_restore: false, judge: { group_id: 0, model_id: '', prompt: t('qualityOps.defaultJudgePrompt') }, bps: defaultQualityBPS() } } }
+      quality: { trigger_on_upstream_5xx: false, expected_answer: '21', action: 'remove_groups' as QualityPolicy['action'], remove_group_ids: [] as number[], remove_models: [] as string[], recovery_concurrency: 5, auto_restore: false, judge: { group_id: 0, model_id: '', prompt: t('qualityOps.defaultJudgePrompt') } as QualityJudgeConfig, bps: defaultQualityBPS() } } }
 }
 const form = ref(defaults())
 const isProbe = computed(() => form.value.pelican_config.question_kind === STATE_PROBE_QUESTION)
@@ -847,6 +864,7 @@ function payload() {
 async function save() {
   if (busy.value || selectingAccounts.value) return
   if ((copying.value || savingPreset.value) && !canCopyRules.value) { error.value = t(savingPreset.value ? 'qualityOps.reusePermission' : 'qualityOps.copyPermission'); return }
+  if (editing.value && ownershipBlocked.value) { error.value = t('qualityOps.scopeConflictHelp'); return }
   if (bulkEditing.value) { await saveBulkRules(); return }
   busy.value = true; error.value = ''; notice.value = ''
   const scope = identity()
@@ -857,7 +875,7 @@ async function save() {
       if (selectedAccounts.value.some(id => existingAccountIds.value.has(id))) throw new Error(t('qualityOps.copyAccountConflict'))
     }
     const judge = form.value.pelican_config.quality.judge
-    if (!isProbe.value && (!judge.group_id || !judge.model_id.trim() || !judge.prompt.trim())) throw new Error(t('qualityOps.configureJudge'))
+    if (!isProbe.value && !qualityJudgeConfigured(judge)) throw new Error(t('qualityOps.configureJudge'))
     if (form.value.pelican_config.quality.action === 'enable_bps') {
       if (!isProbe.value) throw new Error(t('qualityOps.bpsRequiresProbe'))
       const invalid = qualityBPSError(bps.value)
@@ -1036,8 +1054,10 @@ function requestDelete(ids: number[]) {
   const selected = new Set(ids)
   deleteTargets.value = plans.value.filter(plan => selected.has(plan.id))
   deleteError.value = deleteProgress.value = ''
+  deleteReady.value = {}; deleteFences.value = {}; deleteConflicts.value = []
 }
 async function confirmDelete() {
+  if (deleteReviewTargets.value.some(plan => !deleteReady.value[plan.id])) return
   if (!deleteTargets.value.length || deleting.value || busy.value || deleteTargets.value.some(plan => pending.value[plan.id])) return
   deleting.value = busy.value = true
   deleteError.value = deleteProgress.value = error.value = notice.value = ''
@@ -1048,7 +1068,9 @@ async function confirmDelete() {
     for (const plan of targets) {
       if (!alive || scope !== identity()) return
       try {
-        await scheduledTests.delete(plan.id)
+        if (deleteReviewTargets.value.some(target => target.id === plan.id)) {
+          await scheduledTests.delete(plan.id, { fence: deleteFences.value[plan.id], confirm: true })
+        } else await scheduledTests.delete(plan.id)
         if (!alive || scope !== identity()) return
         selectedRuleIds.value = selectedRuleIds.value.filter(id => id !== plan.id)
         bulkRuleIds.value = bulkRuleIds.value.filter(id => id !== plan.id)
@@ -1058,6 +1080,8 @@ async function confirmDelete() {
         if (historyPlan.value?.id === plan.id) closeDetails()
       } catch (e) {
         if (!alive || scope !== identity()) return
+        const failure = e as { reason?: string; response?: { data?: { reason?: string } } }
+        if ((failure.reason ?? failure.response?.data?.reason) === 'QUALITY_ISOLATION_SCOPE_CONFLICT' || (failure.reason ?? failure.response?.data?.reason) === 'QUALITY_OWNERSHIP_PREVIEW_CHANGED') { deleteConflicts.value.push(plan.id); deleteReady.value[plan.id] = false }
         failed.push(plan); failures.push(`#${plan.id}: ${message(e)}`)
       }
       completed++
@@ -1073,11 +1097,24 @@ async function confirmDelete() {
     await Promise.all([store.refreshRules(true), store.refreshOperations()])
   } finally { deleting.value = busy.value = false }
 }
+function judgmentReason(result: ScheduledTestResult) {
+  const judgment = result.quality_judgment
+  if (judgment?.kind !== 'jev') return judgment?.reason || '—'
+  const reason = judgment.reason.replace(/^judge_jev_/, '')
+  const known = ['not_configured', 'config_unavailable', 'disabled', 'invalid_config', 'invalid_input', 'capacity', 'canceled', 'keys_unavailable', 'invalid_endpoint', 'transport_unavailable', 'timeout', 'credentials_rejected', 'rate_limited', 'invalid_response', 'request_failed', 'uncertain', 'correct', 'incorrect']
+  return t(`qualityOps.jevReasons.${known.includes(reason) ? reason : 'uncertain'}`)
+}
+function selectJudgeKind(event: Event) {
+  const judge = form.value.pelican_config.quality.judge
+  judge.kind = (event.target as HTMLSelectElement).value === 'jev' ? 'jev' : 'llm'
+  if (judge.kind === 'jev') { judge.group_id = 0; judge.model_id = '' }
+  void loadJudgeModels()
+}
 async function loadJudgeModels() {
   const request = ++judgeModelsRequest
   const id = form.value.pelican_config.quality.judge.group_id
   judgeModels.value = []
-  if (!id) return
+  if (!id || form.value.pelican_config.quality.judge.kind === 'jev') return
   try { const models = await groupsAPI.getModelAllowlistCandidates(id); if (alive && request === judgeModelsRequest) judgeModels.value = models }
   catch { if (alive && request === judgeModelsRequest) error.value = t('qualityOps.judgeModelsUnavailable') }
 }
@@ -1120,7 +1157,10 @@ function retryDetails() {
 }
 function navigateOperation(offset: number) { const next = filteredOperations.value[operationIndex.value + offset]; if (next) void operationDetails(next) }
 watch(() => identity(), () => { resetReuse(); error.value = notice.value = ''; closeDetails(); showForm.value = false; copying.value = false; copySourceAccountId.value = null; savingPreset.value = false; presetName.value = ''; sourceAccountId.value = sourceRuleId.value = selectedPresetId.value = ''; discardPrompt.value = false; deleteTargets.value = []; deleteError.value = deleteProgress.value = ''; editingTemplate.value = null; templateDeleteTarget.value = null; templatePending.value = {}; accounts.value = []; knownAccounts.clear(); selectedRuleIds.value = []; bulkRuleIds.value = []; bulkEditing.value = false; accountRequest++; judgeModelsRequest++ })
+const operationsRoute = useRoute()
 onMounted(() => {
+  const planId = Number(operationsRoute?.query.plan_id)
+  if (Number.isSafeInteger(planId) && planId > 0) store.selectedPlanId = planId
   void load()
   poll = setInterval(() => { if (document.visibilityState === 'visible' && !refreshing.value && !deleting.value) { void store.refreshRules(); void store.refreshOperations() } }, 30_000)
 })
