@@ -10,14 +10,30 @@
               :key="d"
               type="button"
               class="px-3 py-1.5 text-xs font-medium transition-colors first:rounded-l-lg last:rounded-r-lg"
-              :class="days === d
+              :class="!customRange && days === d
                 ? 'bg-primary-600 text-white'
                 : 'text-gray-600 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-dark-700'"
               @click="days = d"
             >
               {{ d }}{{ t('payment.admin.daySuffix') }}
             </button>
+            <button
+              type="button"
+              class="px-3 py-1.5 text-xs font-medium transition-colors last:rounded-r-lg"
+              :class="customRange ? 'bg-primary-600 text-white' : 'text-gray-600 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-dark-700'"
+              @click="customRange = true"
+            >
+              {{ t('payment.admin.customDateRange') }}
+            </button>
           </div>
+          <template v-if="customRange">
+            <input v-model="startDate" type="date" class="input w-auto py-1.5 text-xs" :max="endDate || today" />
+            <span class="text-xs text-gray-500">{{ t('payment.admin.dateRangeSeparator') }}</span>
+            <input v-model="endDate" type="date" class="input w-auto py-1.5 text-xs" :min="startDate" :max="today" />
+            <button type="button" class="btn btn-secondary" :disabled="!validDateRange || loading" @click="loadDashboard">
+              {{ t('payment.admin.applyDateRange') }}
+            </button>
+          </template>
           <button @click="loadDashboard" :disabled="loading" class="btn btn-secondary" :title="t('common.refresh')">
             <Icon name="refresh" size="md" :class="loading ? 'animate-spin' : ''" />
           </button>
@@ -71,7 +87,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, watch, onMounted } from 'vue'
+import { ref, watch, onMounted, computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores/app'
 import { adminPaymentAPI } from '@/api/admin/payment'
@@ -88,6 +104,11 @@ const appStore = useAppStore()
 
 const DAYS_OPTIONS = [7, 30, 90] as const
 const days = ref<number>(30)
+const customRange = ref(false)
+const today = new Date().toLocaleDateString('en-CA')
+const startDate = ref('')
+const endDate = ref(today)
+const validDateRange = computed(() => !!startDate.value && !!endDate.value && startDate.value <= endDate.value)
 const loading = ref(false)
 const stats = ref<DashboardStats | null>(null)
 
@@ -124,9 +145,15 @@ function formatMoney(currency: string, amount: number): string {
 }
 
 async function loadDashboard() {
+  if (customRange.value && !validDateRange.value) return
   loading.value = true
   try {
-    const res = await adminPaymentAPI.getDashboard(days.value)
+    const res = await adminPaymentAPI.getDashboard(
+      customRange.value ? undefined : days.value,
+      customRange.value && validDateRange.value
+        ? { start_date: startDate.value, end_date: endDate.value }
+        : undefined
+    )
     stats.value = res.data
   } catch (err: unknown) {
     appStore.showError(extractI18nErrorMessage(err, t, 'payment.errors', t('common.error')))
@@ -135,6 +162,9 @@ async function loadDashboard() {
   }
 }
 
-watch(days, () => loadDashboard())
+watch(days, () => {
+  customRange.value = false
+  loadDashboard()
+})
 onMounted(() => loadDashboard())
 </script>

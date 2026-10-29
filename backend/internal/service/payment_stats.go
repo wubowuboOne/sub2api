@@ -53,6 +53,36 @@ func (s *PaymentService) GetDashboardStats(ctx context.Context, days int) (*Dash
 	return st, nil
 }
 
+// GetDashboardStatsWithRange returns payment statistics for [start, end).
+func (s *PaymentService) GetDashboardStatsWithRange(ctx context.Context, start, end time.Time) (*DashboardStats, error) {
+	if !end.After(start) {
+		return nil, nil
+	}
+	now := time.Now()
+	todayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+	paidStatuses := []string{OrderStatusCompleted, OrderStatusPaid, OrderStatusRecharging}
+	orders, err := s.entClient.PaymentOrder.Query().
+		Where(
+			paymentorder.StatusIn(paidStatuses...),
+			paymentorder.PaidAtGTE(start),
+			paymentorder.PaidAtLT(end),
+		).
+		All(ctx)
+	if err != nil {
+		return nil, err
+	}
+	st := &DashboardStats{}
+	computeBasicStats(st, orders, todayStart)
+	st.PendingOrders, err = s.entClient.PaymentOrder.Query().Where(paymentorder.StatusEQ(OrderStatusPending)).Count(ctx)
+	if err != nil {
+		return nil, err
+	}
+	st.DailySeries = buildDailySeriesRange(orders, start, end)
+	st.PaymentMethods = buildMethodDistribution(orders)
+	st.TopUsers = buildTopUsers(orders)
+	return st, nil
+}
+
 func computeBasicStats(st *DashboardStats, orders []*dbent.PaymentOrder, todayStart time.Time) {
 	st.TotalAmount = make(CurrencyAmounts)
 	st.TodayAmount = make(CurrencyAmounts)
@@ -100,6 +130,36 @@ func buildDailySeries(orders []*dbent.PaymentOrder, since time.Time, days int) [
 			series = append(series, *ds)
 		} else {
 			series = append(series, DailyStats{Date: date, Amount: make(CurrencyAmounts)})
+		}
+	}
+	return series
+}
+
+func buildDailySeriesRange(orders []*dbent.PaymentOrder, start, end time.Time) []DailyStats {
+	dailyMap := make(map[string]*DailyStats)
+	for _, o := range orders {
+		if o.PaidAt == nil {
+			continue
+		}
+		date := o.PaidAt.Format("2006-01-02")
+		ds, ok := dailyMap[date]
+		if !ok {
+			ds = &DailyStats{Date: date, Amount: make(CurrencyAmounts)}
+			dailyMap[date] = ds
+		}
+		ds.Amount[PaymentOrderCurrency(o)] += o.PayAmount
+		ds.Count++
+	}
+	start = time.Date(start.Year(), start.Month(), start.Day(), 0, 0, 0, 0, start.Location())
+	end = time.Date(end.Year(), end.Month(), end.Day(), 0, 0, 0, 0, end.Location())
+	series := make([]DailyStats, 0, int(end.Sub(start).Hours()/24))
+	for date := start; date.Before(end); date = date.AddDate(0, 0, 1) {
+		key := date.Format("2006-01-02")
+		if ds, ok := dailyMap[key]; ok {
+			roundCurrencyAmounts(ds.Amount)
+			series = append(series, *ds)
+		} else {
+			series = append(series, DailyStats{Date: key, Amount: make(CurrencyAmounts)})
 		}
 	}
 	return series
