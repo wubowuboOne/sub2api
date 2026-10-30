@@ -11,6 +11,7 @@
       @submit.prevent="handleSubmit"
       class="space-y-5"
     >
+      <AccountUpstreamChannelBinding v-if="show" :account-ids="[account.id]" />
       <div>
         <label class="input-label">{{ t('common.name') }}</label>
         <input v-model="form.name" type="text" required class="input" data-tour="edit-account-form-name" />
@@ -25,6 +26,9 @@
         ></textarea>
         <p class="input-hint">{{ t('admin.accounts.notesHint') }}</p>
       </div>
+
+      <OpenAIAuthConnections v-if="account.platform === 'openai' && ['oauth', 'apikey'].includes(account.type) && !isSparkShadow"
+        :account-id="account.id" :active="show" />
 
       <SIWCAccountSettings v-if="account.platform === 'openai' && account.type === 'oauth' && !isSparkShadow"
         v-model:enabled="siwcEnabled" :account-id="account.id" :active="show" />
@@ -3624,6 +3628,7 @@ import OpenAIRequestTimezoneField from '@/components/account/OpenAIRequestTimezo
 import ExtraImageModelsField from '@/components/account/ExtraImageModelsField.vue'
 import { parseExtraImageModels, readExtraImageModels } from '@/utils/extraImageModels'
 import SIWCAccountSettings from './SIWCAccountSettings.vue'
+import OpenAIAuthConnections from './OpenAIAuthConnections.vue'
 import ExcelBPSCredentialStatus from './ExcelBPSCredentialStatus.vue'
 import { DEFAULT_ACCOUNT_COST_MULTIPLIER, isValidAccountCostMultiplier, readAccountCostMultiplier } from '@/utils/accountCost'
 
@@ -3657,6 +3662,7 @@ import type {
   TempUnschedulableScope
 } from '@/types'
 import BaseDialog from '@/components/common/BaseDialog.vue'
+import AccountUpstreamChannelBinding from './AccountUpstreamChannelBinding.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import Select from '@/components/common/Select.vue'
 import HelpTooltip from '@/components/common/HelpTooltip.vue'

@@ -432,6 +432,14 @@ func registerAccountRoutes(admin *gin.RouterGroup, h *handler.Handlers, stepUpAu
 		accounts.PUT("/opencode-go-usage/settings", h.Admin.Account.UpdateOpenCodeGoUsageSettings)
 		accounts.GET("/:id", h.Admin.Account.GetByID)
 		if h.Admin.OpenAIOAuthReauth != nil {
+			accounts.POST("/:id/auth-connections/use-legacy", h.Admin.OpenAIOAuthReauth.SelectLegacyAuthConnection)
+			accounts.PUT("/:id/auth-connections/:connection_id/api-key", h.Admin.OpenAIOAuthReauth.RotateConnectionAPIKey)
+			accounts.GET("/:id/auth-connections", h.Admin.OpenAIOAuthReauth.ListAuthConnections)
+			accounts.POST("/:id/auth-connections", h.Admin.OpenAIOAuthReauth.CreateAuthConnection)
+			accounts.PATCH("/:id/auth-connections/:connection_id", h.Admin.OpenAIOAuthReauth.UpdateAuthConnection)
+			accounts.POST("/:id/auth-connections/:connection_id/authorize", h.Admin.OpenAIOAuthReauth.BeginConnectionAuthorization)
+			accounts.POST("/:id/auth-connections/:connection_id/callback", h.Admin.OpenAIOAuthReauth.CompleteConnectionAuthorization)
+			accounts.POST("/:id/auth-connections/:connection_id/revoke", h.Admin.OpenAIOAuthReauth.RevokeAuthConnection)
 			accounts.GET("/:id/openai-reauth", h.Admin.OpenAIOAuthReauth.GetStatus)
 			accounts.GET("/:id/siwc", h.Admin.OpenAIOAuthReauth.SIWCStatus)
 			accounts.POST("/:id/siwc/authorize", h.Admin.OpenAIOAuthReauth.BeginSIWC)
@@ -876,6 +884,10 @@ func registerScheduledTestRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
 	admin.GET("/priority-scheduling/config", h.Admin.Setting.GetPriorityScheduling)
 	admin.PUT("/priority-scheduling/config", h.Admin.Setting.SavePriorityScheduling)
 	admin.GET("/priority-scheduling/snapshot", h.Admin.Account.PrioritySchedulingSnapshot)
+	admin.GET("/priority-scheduling/latency", h.Admin.Account.PrioritySchedulingLatency)
+	admin.POST("/priority-scheduling/recompute", h.Admin.Account.RecomputePriorityScheduling)
+	admin.GET("/priority-scheduling/sticky-bindings", h.Admin.Account.PrioritySchedulingStickyBindings)
+	admin.POST("/priority-scheduling/sticky-bindings/clear", h.Admin.Account.ClearPrioritySchedulingStickyBindings)
 	admin.GET("/account-ops/auto-config", h.Admin.AccountOps.GetAutoConfig)
 	admin.PUT("/account-ops/auto-config", h.Admin.AccountOps.SaveAutoConfig)
 	admin.GET("/account-ops/auto-config/events", h.Admin.AccountOps.ListAutoConfigEvents)
@@ -1011,6 +1023,17 @@ func registerPluginRoutes(admin *gin.RouterGroup, h *handler.Handlers, stepUpAut
 }
 
 func registerChannelRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
+	if h.Admin.Account != nil && h.Admin.Channel != nil {
+		h.Admin.Account.SetUpstreamChannelService(h.Admin.Channel.UpstreamChannelService())
+	}
+	admin.GET("/upstream-channels", h.Admin.Channel.ListUpstreamChannels)
+	admin.POST("/upstream-channels", h.Admin.Channel.MutateUpstreamChannel)
+	admin.GET("/upstream-channels/:id", h.Admin.Channel.GetUpstreamChannel)
+	admin.PUT("/upstream-channels/:id", h.Admin.Channel.MutateUpstreamChannel)
+	admin.DELETE("/upstream-channels/:id", h.Admin.Channel.MutateUpstreamChannel)
+	admin.GET("/upstream-channels/:id/members", h.Admin.Channel.UpstreamChannelMembers)
+	admin.GET("/upstream-channel-bindings", h.Admin.Channel.ReadUpstreamChannelBindings)
+	admin.PUT("/upstream-channel-bindings", h.Admin.Channel.BindUpstreamChannelAccounts)
 	admin.GET("/profit-operations/snapshot", h.Admin.Channel.ProfitOperations)
 	admin.GET("/upstream-operations/snapshot", h.Admin.Channel.UpstreamOperations)
 	channels := admin.Group("/channels")

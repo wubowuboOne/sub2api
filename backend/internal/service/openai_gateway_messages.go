@@ -40,6 +40,9 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 	ctx = admittedCtx
 	ctx, scope := withPriorityAttemptScope(ctx, gjson.GetBytes(body, "model").String(), "/v1/messages")
 	result, err := s.forwardAsAnthropic(ctx, c, account, body, promptCacheKey, defaultMappedModel)
+	if result != nil && c != nil {
+		result.AuthConnectionID = c.GetString("openai_auth_connection_id")
+	}
 	scope.finish(result)
 	return result, err
 }

@@ -57,6 +57,18 @@ func (s *OpenAIGatewayService) PrioritySchedulingSnapshot() *PrioritySchedulingS
 	if input == nil {
 		return nil
 	}
+	return s.prioritySchedulingSnapshot(input)
+}
+
+func (s *OpenAIGatewayService) prioritySchedulingSnapshot(input *prioritySnapshotInput) *PrioritySchedulingSnapshot {
+	snapshot, _ := s.prioritySchedulingSnapshotWithHistory(input)
+	return snapshot
+}
+
+func (s *OpenAIGatewayService) prioritySchedulingSnapshotWithHistory(input *prioritySnapshotInput) (*PrioritySchedulingSnapshot, priorityHistoryResult) {
+	if s == nil || input == nil {
+		return nil, priorityHistoryResult{}
+	}
 	h := priorityHistoryResult{status: "limited"}
 	if !input.limited {
 		h = s.priorityHistory(input.request, input.config, input.candidates)
@@ -95,7 +107,7 @@ func (s *OpenAIGatewayService) PrioritySchedulingSnapshot() *PrioritySchedulingS
 	}
 	slices.SortStableFunc(snapshot.Candidates, comparePrioritySnapshotScores)
 	snapshot.Candidates = snapshot.Candidates[:min(len(snapshot.Candidates), 100)]
-	return snapshot
+	return snapshot, h
 }
 
 func comparePrioritySnapshotScores(a, b PrioritySchedulingScore) int {

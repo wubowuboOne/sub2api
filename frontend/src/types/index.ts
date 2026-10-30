@@ -1405,6 +1405,7 @@ export interface GrokModelDiagnostics {
 }
 
 export interface Account {
+  upstream_channel_binding?: import('@/api/admin/upstreamChannels').ChannelBinding
  excel_bps_credential_state?: ExcelBPSCredentialState
   id: number
   name: string
@@ -1746,6 +1747,8 @@ export interface OpenAIResponsesState {
 }
 
 export interface CreateAccountRequest {
+  upstream_channel_id?: number
+  confirm_upstream_channel_binding?: boolean
   name: string
   notes?: string | null
   platform: AccountPlatform

@@ -236,6 +236,7 @@ type OpenAIUsage struct {
 
 // OpenAIForwardResult represents the result of forwarding
 type OpenAIForwardResult struct {
+	AuthConnectionID string
 	// RegionalMetered prevents the legacy asynchronous path from double charging.
 	RegionalMetered bool
 	RequestID       string
@@ -419,12 +420,19 @@ type accountWriteThrottle struct {
 	minInterval time.Duration
 	mu          sync.Mutex
 	lastByID    map[int64]time.Time
+	pending     map[codexWriteKey]*codexPendingWrite
+	ctx         context.Context
+	cancel      context.CancelFunc
+	workers     sync.WaitGroup
+	closed      bool
 }
 
 func newAccountWriteThrottle(minInterval time.Duration) *accountWriteThrottle {
+	ctx, cancel := context.WithCancel(context.Background())
 	return &accountWriteThrottle{
 		minInterval: minInterval,
 		lastByID:    make(map[int64]time.Time),
+		ctx:         ctx, cancel: cancel,
 	}
 }
 
@@ -553,6 +561,8 @@ type OpenAIGatewayService struct {
 	openaiWSRetryMetrics                openAIWSRetryMetrics
 	responseHeaderFilter                *responseheaders.CompiledHeaderFilter
 	codexSnapshotThrottle               *accountWriteThrottle
+	codexSnapshotMu                     sync.Mutex
+	codexSnapshotClosed                 bool
 	openAIModelsCache                   openAIModelsCache
 	excelBPSModelsCache                 openAIModelsCache
 	openaiCompatSessionResponses        sync.Map
@@ -588,6 +598,12 @@ type OpenAIGatewayOption func(*OpenAIGatewayService)
 // WithOpenAIRPMCache enables strict RPM accounting for OpenAI OAuth accounts.
 func WithOpenAIRPMCache(cache RPMCache) OpenAIGatewayOption {
 	return func(s *OpenAIGatewayService) { s.rpmCache = cache }
+}
+
+// WithOpenAIAuthConnections supplies the durable grant service to standalone
+// gateway embedders. Application Wire supplies it after resolving the cycle.
+func WithOpenAIAuthConnections(connections *OpenAIOAuthReauthService) OpenAIGatewayOption {
+	return func(s *OpenAIGatewayService) { s.excelOAuthReauth = connections }
 }
 
 // NewOpenAIGatewayService creates a new OpenAIGatewayService
@@ -778,10 +794,18 @@ func (s *OpenAIGatewayService) ReplaceModelInBody(body []byte, newModel string) 
 }
 
 func (s *OpenAIGatewayService) getCodexSnapshotThrottle() *accountWriteThrottle {
-	if s != nil && s.codexSnapshotThrottle != nil {
-		return s.codexSnapshotThrottle
+	if s == nil {
+		return defaultOpenAICodexSnapshotPersistThrottle
 	}
-	return defaultOpenAICodexSnapshotPersistThrottle
+	s.codexSnapshotMu.Lock()
+	defer s.codexSnapshotMu.Unlock()
+	if s.codexSnapshotThrottle == nil {
+		s.codexSnapshotThrottle = newAccountWriteThrottle(openAICodexSnapshotPersistMinInterval)
+		if s.codexSnapshotClosed {
+			s.codexSnapshotThrottle.close()
+		}
+	}
+	return s.codexSnapshotThrottle
 }
 
 func (s *OpenAIGatewayService) billingDeps() *billingDeps {
@@ -799,6 +823,15 @@ func (s *OpenAIGatewayService) billingDeps() *billingDeps {
 // CloseOpenAIWSPool 关闭 OpenAI WebSocket 连接池的后台 worker 和空闲连接。
 // 应在应用优雅关闭时调用。
 func (s *OpenAIGatewayService) CloseOpenAIWSPool() {
+	if s != nil {
+		s.codexSnapshotMu.Lock()
+		s.codexSnapshotClosed = true
+		throttle := s.codexSnapshotThrottle
+		s.codexSnapshotMu.Unlock()
+		if throttle != nil {
+			throttle.close()
+		}
+	}
 	if s != nil && s.regionalMetering != nil && s.regionalMetering.Stop != nil {
 		s.regionalMetering.Stop()
 	}
@@ -1310,6 +1343,31 @@ func hashSensitiveValueForLog(raw string) string {
 // GetAccessToken gets the access token for an OpenAI account
 func (s *OpenAIGatewayService) GetAccessToken(ctx context.Context, account *Account) (string, string, error) {
 	defer requesttiming.Observe(ctx, "upstream_credentials")()
+	if err := validateOpenAIConnectionKind(account); err != nil {
+		return "", "", err
+	}
+	if s.excelOAuthReauth != nil {
+		if err := s.excelOAuthReauth.validateAuthConnectionPolicy(ctx, account); err != nil {
+			return "", "", err
+		}
+	}
+	if account != nil && account.AuthConnectionID != "" {
+		if s.excelOAuthReauth == nil {
+			return "", "", errors.New("authorization connection service unavailable")
+		}
+		token, err := s.excelOAuthReauth.ConnectionAccessToken(ctx, account.ID, account.AuthConnectionID)
+		kind := account.GetExtraString("openai_connection_kind")
+		if kind == "siwc" {
+			return token, "siwc", err
+		}
+		if kind == "api_key" {
+			return token, "apikey", err
+		}
+		return token, "oauth", err
+	}
+	if account.HasManagedOpenAIConnections() {
+		return "", "", errors.New("select a capable authorization connection before requesting credentials")
+	}
 	selectedSIWC := account.IsSIWCEnabled()
 	if account.IsShadow() {
 		credAccount, err := resolveCredentialAccount(ctx, s.accountRepo, account)
