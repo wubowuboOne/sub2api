@@ -889,6 +889,9 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 				)
 			}
 		}
+		if err := prependOpenAIWSGroupPrompt(ctx, &normalized, originalModel); err != nil {
+			return openAIWSClientPayload{}, err
+		}
 		promptCacheKey := strings.TrimSpace(values[2].String())
 		previousResponseID := strings.TrimSpace(values[3].String())
 		previousResponseIDKind := ClassifyOpenAIPreviousResponseIDKind(previousResponseID)

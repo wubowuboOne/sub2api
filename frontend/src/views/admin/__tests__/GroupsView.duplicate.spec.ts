@@ -156,6 +156,7 @@ function mountView() {
   return mount(GroupsView, {
     global: {
       stubs: {
+        GroupPromptFields: true,
         AppLayout: AppLayoutStub,
         TablePageLayout: TablePageLayoutStub,
         DataTable: DataTableStub,

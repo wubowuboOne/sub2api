@@ -207,6 +207,7 @@ const mountView = () =>
     global: {
       plugins: [createPinia()],
       stubs: {
+        GroupPromptFields: true,
         AppLayout: AppLayoutStub,
         TablePageLayout: TablePageLayoutStub,
         DataTable: DataTableStub,

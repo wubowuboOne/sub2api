@@ -55,6 +55,7 @@ func RegisterAdminRoutes(
 
 		// 分组管理
 		registerGroupRoutes(admin, h)
+		registerGroupPromptRoutes(admin, h, settingService)
 
 		// 账号管理
 		registerAccountRoutes(admin, h, stepUpAuth)

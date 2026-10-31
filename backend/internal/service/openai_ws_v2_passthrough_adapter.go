@@ -776,6 +776,9 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 	if initialRequestModel == "" {
 		initialRequestModel = openAIWSPassthroughRequestModelForFrame(firstClientMessage)
 	}
+	if err := prependOpenAIWSGroupPrompt(ctx, &firstClientMessage, initialRequestModel); err != nil {
+		return err
+	}
 	if hooks != nil && hooks.MapRequestModel != nil {
 		mappedModel, mapErr := hooks.MapRequestModel(1, initialRequestModel)
 		if mapErr != nil {
@@ -1149,6 +1152,9 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 				requestModelForThisFrame = usageMeta.requestModelForFrame(payload)
 				if requestModelForThisFrame == "" {
 					requestModelForThisFrame = capturedSessionModel
+				}
+				if err := prependOpenAIWSGroupPrompt(ctx, &payload, requestModelForThisFrame); err != nil {
+					return payload, nil, err
 				}
 				if hooks != nil && hooks.BeforeRequest != nil {
 					if err := hooks.BeforeRequest(turnNo, payload, requestModelForThisFrame); err != nil {
