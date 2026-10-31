@@ -29,11 +29,13 @@ func (s *OpenAIGatewayService) doOpenAIUpstream(request *http.Request, proxyURL 
 	}
 	var phaseGuard *openAIHTTPPhaseGuard
 	request, phaseGuard = s.guardOpenAIHTTPRequest(request, account)
+	request, finishHeaderTimeout := guardOpenAIResponseHeaderTimeout(request, account)
 	defer func() {
 		if result != nil && result.Request == nil {
 			result.Request = request
 		}
 		result, resultErr = phaseGuard.finish(result, resultErr)
+		resultErr = finishHeaderTimeout(result, resultErr)
 	}()
 	if phaseGuard != nil && phaseGuard.ctx.Err() != nil {
 		return nil, context.Cause(phaseGuard.ctx)
@@ -154,7 +156,7 @@ func (s *AccountTestService) doOpenAIAccountTestUpstream(
 		}
 	}
 	if useTLSFallback {
-		return s.httpUpstream.DoWithTLS(
+		return timedAccountTestUpstream(s.httpUpstream).DoWithTLS(
 			request,
 			proxyURL,
 			account.ID,
@@ -162,5 +164,5 @@ func (s *AccountTestService) doOpenAIAccountTestUpstream(
 			s.tlsFPProfileService.ResolveTLSProfile(account),
 		)
 	}
-	return s.httpUpstream.Do(request, proxyURL, account.ID, account.Concurrency)
+	return timedAccountTestUpstream(s.httpUpstream).Do(request, proxyURL, account.ID, account.Concurrency)
 }
