@@ -14,6 +14,7 @@ const {
   getCapacitySummary,
   getLiveCapability,
   updateGroup,
+  savePromptSettings,
 } = vi.hoisted(() => ({
   listGroups: vi.fn(),
   getModelAllowlistCandidates: vi.fn(),
@@ -21,6 +22,7 @@ const {
   getCapacitySummary: vi.fn(),
   getLiveCapability: vi.fn(),
   updateGroup: vi.fn(),
+  savePromptSettings: vi.fn(),
 }));
 
 vi.mock("@/api/admin", () => ({
@@ -211,6 +213,14 @@ const mountView = () =>
     global: {
       plugins: [createPinia()],
       stubs: {
+        GroupPromptFields: defineComponent({
+          name: "GroupPromptFields",
+          props: { groupId: { type: Number, required: true } },
+          setup(_, { expose }) {
+            expose({ save: savePromptSettings });
+            return () => h("div", { "data-testid": "group-prompt-fields" });
+          },
+        }),
         AppLayout: AppLayoutStub,
         TablePageLayout: TablePageLayoutStub,
         DataTable: DataTableStub,
@@ -226,7 +236,7 @@ const mountView = () =>
         GroupRPMOverridesModal: true,
         ReasoningEffortPolicyFields: defineComponent({
           setup(_, { expose }) {
-            expose({ validate: () => true });
+            expose({ validate: () => true, resetValidation: () => undefined });
             return () => h("div");
           },
         }),
@@ -240,6 +250,7 @@ const mountView = () =>
 describe("GroupsView Codex manifest binding", () => {
   beforeEach(() => {
     localStorage.clear();
+    savePromptSettings.mockReset().mockResolvedValue(undefined);
     listGroups.mockReset();
     getModelAllowlistCandidates.mockReset();
     getUsageSummary.mockReset();
@@ -281,6 +292,49 @@ describe("GroupsView Codex manifest binding", () => {
     await flushPromises();
     expect(updateGroup).toHaveBeenLastCalledWith(42, expect.objectContaining({ web_search_account_id: 0 }));
     wrapper.unmount();
+  });
+
+  it("waits for prompt persistence before updating the group", async () => {
+    let finishSave!: () => void;
+    savePromptSettings.mockReturnValueOnce(new Promise<void>(resolve => { finishSave = resolve; }));
+    const wrapper = mountView();
+    await flushPromises();
+    await wrapper.findAll("button").find(button => button.text().includes("common.edit"))!.trigger("click");
+    await flushPromises();
+    expect(wrapper.findComponent({ name: "GroupPromptFields" }).props("groupId")).toBe(42);
+    await wrapper.get("#edit-group-form").trigger("submit");
+    await flushPromises();
+    expect(savePromptSettings).toHaveBeenCalledTimes(1);
+    expect(updateGroup).not.toHaveBeenCalled();
+    finishSave();
+    await flushPromises();
+    expect(updateGroup).toHaveBeenCalledWith(42, expect.objectContaining({
+      web_search_account_id: 7,
+      codex_models_manifest_config: sourceGroup.codex_models_manifest_config,
+    }));
+    wrapper.unmount();
+  });
+
+  it("keeps the group editor open after prompt persistence fails and allows retry", async () => {
+    const errorLog = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      savePromptSettings.mockRejectedValueOnce(new Error("prompt storage unavailable"));
+      const wrapper = mountView();
+      await flushPromises();
+      await wrapper.findAll("button").find(button => button.text().includes("common.edit"))!.trigger("click");
+      await flushPromises();
+      await wrapper.get("#edit-group-form").trigger("submit");
+      await flushPromises();
+      expect(updateGroup).not.toHaveBeenCalled();
+      expect(wrapper.find("#edit-group-form").exists()).toBe(true);
+      await wrapper.get("#edit-group-form").trigger("submit");
+      await flushPromises();
+      expect(savePromptSettings).toHaveBeenCalledTimes(2);
+      expect(updateGroup).toHaveBeenCalledTimes(1);
+      wrapper.unmount();
+    } finally {
+      errorLog.mockRestore();
+    }
   });
 
   it("preserves consecutive child updates on the reactive edit config", async () => {

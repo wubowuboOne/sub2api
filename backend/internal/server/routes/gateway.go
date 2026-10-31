@@ -103,6 +103,7 @@ func RegisterGatewayRoutes(
 	groupAntiDistillation := middleware.GroupAntiDistillation(apiKeyService.CheckGroupAntiDistillation)
 	groupCodexCLIOnly := middleware.GroupCodexCLIOnly(settingService)
 	groupBlockSubagents := middleware.GroupBlockSubagents()
+	groupPrompt := middleware.GroupPrompt(settingService)
 
 	isOpenAIResponsesCompatibleGatewayPlatform := func(c *gin.Context) bool {
 		// openai、grok 与多协议 API Key 供应商经 OpenAI 网关转发（平台清单）。
@@ -259,6 +260,7 @@ func RegisterGatewayRoutes(
 	gateway.Use(groupModelAllowlist, apiKeyModelPolicy)
 	gateway.Use(groupCodexCLIOnly, groupBlockSubagents)
 	gateway.Use(groupAntiDistillation, groupStreamOnly)
+	gateway.Use(groupPrompt)
 	// A serverless route may proxy to an older pod before local target resolution.
 	// Enforce the key policy at the owner and again after local model rewriting.
 	gateway.Use(apiKeyLongContext)
@@ -433,6 +435,7 @@ func RegisterGatewayRoutes(
 	gemini.Use(groupModelAllowlist)
 	gemini.Use(groupCodexCLIOnly, groupBlockSubagents)
 	gemini.Use(groupStreamOnly)
+	gemini.Use(groupPrompt)
 	gemini.Use(compositeGeminiTarget)
 	gemini.Use(apiKeyLongContext)
 	gemini.Use(requireGroupGoogle)
@@ -468,7 +471,7 @@ func RegisterGatewayRoutes(
 	// 根路径别名共用中间件链：白名单准入在 apiKeyAuth 之后、compositeTarget
 	// 之前，避免逐条路由手工维护链导致漏挂。
 	rootRoute := func(method, path string, limit gin.HandlerFunc, handler gin.HandlerFunc) {
-		r.Handle(method, path, traffic, limit, clientRequestID, opsErrorLogger, endpointNorm, gin.HandlerFunc(apiKeyAuth), captureTraffic, imageAdmission, groupModelAllowlist, apiKeyModelPolicy, groupCodexCLIOnly, groupBlockSubagents, groupAntiDistillation, groupStreamOnly, apiKeyLongContext, podRoute, compositeTarget, apiKeyLongContext, requireGroupAnthropic, handler)
+		r.Handle(method, path, traffic, limit, clientRequestID, opsErrorLogger, endpointNorm, gin.HandlerFunc(apiKeyAuth), captureTraffic, imageAdmission, groupModelAllowlist, apiKeyModelPolicy, groupCodexCLIOnly, groupBlockSubagents, groupAntiDistillation, groupStreamOnly, groupPrompt, apiKeyLongContext, podRoute, compositeTarget, apiKeyLongContext, requireGroupAnthropic, handler)
 	}
 	for _, prefix := range []string{"/api/v3", "/v3", "/v1", ""} {
 		rootRoute(http.MethodPost, prefix+"/contents/generations/tasks", bodyLimit, h.OpenAIGateway.SeedanceTasks)
@@ -485,7 +488,7 @@ func RegisterGatewayRoutes(
 	rootRoute(http.MethodGet, "/models/:model", bodyLimit, h.Gateway.Models)
 	rootRoute(http.MethodPost, "/messages/count_tokens", bodyLimit, countTokensHandler)
 	codexDirect := r.Group("/backend-api/codex")
-	codexDirect.Use(traffic, bodyLimit, clientRequestID, opsErrorLogger, endpointNorm, gin.HandlerFunc(apiKeyAuth), captureTraffic, imageAdmission, groupModelAllowlist, apiKeyModelPolicy, groupCodexCLIOnly, groupBlockSubagents, groupAntiDistillation, groupStreamOnly, apiKeyLongContext, podRoute, compositeTarget, apiKeyLongContext, requireGroupAnthropic)
+	codexDirect.Use(traffic, bodyLimit, clientRequestID, opsErrorLogger, endpointNorm, gin.HandlerFunc(apiKeyAuth), captureTraffic, imageAdmission, groupModelAllowlist, apiKeyModelPolicy, groupCodexCLIOnly, groupBlockSubagents, groupAntiDistillation, groupStreamOnly, groupPrompt, apiKeyLongContext, podRoute, compositeTarget, apiKeyLongContext, requireGroupAnthropic)
 	{
 		codexDirect.POST("/realtime/calls", h.OpenAIGateway.Live)
 		codexDirect.GET("/:call_id", h.OpenAIGateway.LiveSideband)
@@ -610,6 +613,7 @@ func RegisterGatewayRoutes(
 	antigravityV1.Use(groupModelAllowlist, apiKeyModelPolicy)
 	antigravityV1.Use(groupCodexCLIOnly, groupBlockSubagents)
 	antigravityV1.Use(groupStreamOnly)
+	antigravityV1.Use(groupPrompt)
 	antigravityV1.Use(apiKeyLongContext)
 	antigravityV1.Use(requireGroupAnthropic)
 	{
@@ -630,6 +634,7 @@ func RegisterGatewayRoutes(
 	antigravityV1Beta.Use(groupModelAllowlist)
 	antigravityV1Beta.Use(groupCodexCLIOnly, groupBlockSubagents)
 	antigravityV1Beta.Use(groupStreamOnly)
+	antigravityV1Beta.Use(groupPrompt)
 	antigravityV1Beta.Use(apiKeyLongContext)
 	antigravityV1Beta.Use(requireGroupGoogle)
 	{

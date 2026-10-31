@@ -3266,6 +3266,13 @@
           class="border-t border-gray-200 dark:border-dark-400 pt-4 mt-4"
         />
 
+        <GroupPromptFields
+          v-if="!authStore.isSimpleMode && editingGroup"
+          :key="editingGroup.id"
+          ref="editGroupPromptRef"
+          :group-id="editingGroup.id"
+        />
+
         <!-- 固定账号获取 Codex Model Manifest（仅 openai 平台，仅编辑对话框） -->
         <CodexManifestAccountsField
           v-if="editForm.platform === 'openai' && editingGroup"
@@ -4471,6 +4478,7 @@ import GroupUserDeniedModelsModal from "@/components/admin/group/GroupUserDenied
 import GroupCapacityBadge from "@/components/common/GroupCapacityBadge.vue";
 import ReasoningEffortPolicyFields from "@/components/admin/group/ReasoningEffortPolicyFields.vue";
 import CodexManifestAccountsField from "@/components/admin/group/CodexManifestAccountsField.vue";
+import GroupPromptFields from "@/components/admin/group/GroupPromptFields.vue";
 import PricingEntryCard from "@/components/admin/channel/PricingEntryCard.vue";
 import type { PricingFormEntry } from "@/components/admin/channel/types";
 import {
@@ -5005,6 +5013,7 @@ const showSortModal = ref(false);
 const submitting = ref(false);
 const sortSubmitting = ref(false);
 const editingGroup = ref<AdminGroup | null>(null);
+const editGroupPromptRef = ref<{ save: () => Promise<void> } | null>(null);
 const deletingGroup = ref<AdminGroup | null>(null);
 const duplicatingGroupIds = reactive(new Set<number>());
 const showRateMultipliersModal = ref(false);
@@ -6590,6 +6599,7 @@ const handleUpdateGroup = async () => {
           i18n: editForm.i18n,
         }
       : payload;
+    await editGroupPromptRef.value?.save?.();
     await adminAPI.groups.update(editingGroup.value.id, requestData);
     appStore.showSuccess(t("admin.groups.groupUpdated"));
     closeEditModal();
