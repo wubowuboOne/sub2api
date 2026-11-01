@@ -80,6 +80,14 @@ Sub2API 是一个 AI API 网关平台，用于分发和管理 AI 产品订阅的
 - **管理后台** - Web 界面进行监控和管理
 - **外部系统集成** - 支持通过 iframe 嵌入外部系统（如工单等），扩展管理后台功能
 
+### Anthropic API Key 客户端模拟与计费
+
+创建或编辑 Anthropic API Key 账号时, 可开启 "模拟 Claude Code 客户端", 为要求 Claude Code 客户端的上游补齐缺失的请求头, system 身份句和会话信息. 原有 system 指令及缓存断点会保留, count_tokens 仅补请求头. 此选项与 "抹除 Claude Code 身份" 互斥, 同时存储为开启时以抹除身份为准. 身份句可能影响模型自述.
+
+管理员可单独选择 "按模型估算扣除身份句 token". 默认关闭, 按上游用量正常计费. 开启后, 仅在网关实际补入身份句时估算扣除约 14-24 个输入或缓存 token, 不修改返回客户端的 usage. 型号别名, 上游分词器和混合缓存会影响估算准确度; 需要按上游原始用量结算时, 保持此开关关闭.
+
+对应账号 extra 配置为 `anthropic_mimic_claude_code` 和 `anthropic_mimic_claude_code_deduct_tokens`, 均默认 `false`. 关闭模拟或开启抹除身份时, 页面同时清除估算扣减设置.
+
 ### 首次初始化管理员
 
 全新自动安装时，`ADMIN_EMAIL` 和 `ADMIN_PASSWORD` 留空会生成随机登录邮箱和密码，可从首次启动日志中的 `Generated admin` 获取。显式指定时，邮箱必须符合登录格式，密码必须为 8–72 字节。已有管理员或已有用户的部署跳过创建与此项校验。详细配置见 [部署说明](deploy/README.md)。
