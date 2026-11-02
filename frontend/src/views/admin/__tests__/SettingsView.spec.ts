@@ -23,8 +23,9 @@ beforeEach(() => {
   settingsRoute.query = {};
   settingsRoute.hash = '';
   Element.prototype.scrollIntoView = vi.fn();
-  getOpenAIResponseHeaderTimeoutSettings.mockReset().mockResolvedValue({ enabled: true, seconds: 20 });
+  getOpenAIResponseHeaderTimeoutSettings.mockReset().mockResolvedValue({ enabled: false, seconds: 20 });
   updateOpenAIResponseHeaderTimeoutSettings.mockReset().mockImplementation(async (payload) => payload);
+  getAccountPerformanceSettings.mockReset().mockResolvedValue({ window_minutes: 60 });
 });
 
 const {
@@ -41,6 +42,8 @@ const {
   getStreamTimeoutSettings,
   getOpenAIResponseHeaderTimeoutSettings,
   updateOpenAIResponseHeaderTimeoutSettings,
+  getAccountPerformanceSettings,
+  updateAccountPerformanceSettings,
   getRectifierSettings,
   getBetaPolicySettings,
   getUpstreamBillingProbeSettings,
@@ -77,6 +80,8 @@ const {
   getStreamTimeoutSettings: vi.fn(),
   getOpenAIResponseHeaderTimeoutSettings: vi.fn(),
   updateOpenAIResponseHeaderTimeoutSettings: vi.fn(),
+  getAccountPerformanceSettings: vi.fn(),
+  updateAccountPerformanceSettings: vi.fn().mockImplementation(async (payload) => payload),
   getRectifierSettings: vi.fn(),
   getBetaPolicySettings: vi.fn(),
   getUpstreamBillingProbeSettings: vi.fn().mockResolvedValue({
@@ -120,6 +125,8 @@ vi.mock("@/api", () => ({
       getStreamTimeoutSettings,
       getOpenAIResponseHeaderTimeoutSettings,
       updateOpenAIResponseHeaderTimeoutSettings,
+      getAccountPerformanceSettings,
+      updateAccountPerformanceSettings,
       getRectifierSettings,
       getBetaPolicySettings,
     },
@@ -1264,6 +1271,28 @@ describe("admin SettingsView payment visible method controls", () => {
     );
   });
 
+  it("starts with the OpenAI header timeout disabled and retains seconds for manual enabling", async () => {
+    const wrapper = mountView();
+    const vm = wrapper.vm as unknown as {
+      openAIResponseHeaderTimeoutForm: { enabled: boolean; seconds: number };
+    };
+    expect(vm.openAIResponseHeaderTimeoutForm).toEqual({ enabled: false, seconds: 20 });
+
+    await flushPromises();
+    await openGatewayTab(wrapper);
+    expect((wrapper.get('[data-testid="openai-header-timeout-enabled"]').element as HTMLInputElement).checked).toBe(false);
+    expect(wrapper.find('[data-testid="openai-header-timeout-seconds"]').exists()).toBe(false);
+    await wrapper.get('[data-testid="openai-header-timeout-save"]').trigger('click');
+    await flushPromises();
+    expect(updateOpenAIResponseHeaderTimeoutSettings).toHaveBeenLastCalledWith({ enabled: false, seconds: 20 });
+
+    await wrapper.get('[data-testid="openai-header-timeout-enabled"]').setValue(true);
+    expect((wrapper.get('[data-testid="openai-header-timeout-seconds"]').element as HTMLInputElement).value).toBe('20');
+    await wrapper.get('[data-testid="openai-header-timeout-save"]').trigger('click');
+    await flushPromises();
+    expect(updateOpenAIResponseHeaderTimeoutSettings).toHaveBeenLastCalledWith({ enabled: true, seconds: 20 });
+  });
+
   it("loads, disables, enables and saves the OpenAI header timeout with server readback", async () => {
     getOpenAIResponseHeaderTimeoutSettings.mockResolvedValueOnce({ enabled: false, seconds: 45 });
     const wrapper = mountView();
@@ -1285,6 +1314,7 @@ describe("admin SettingsView payment visible method controls", () => {
   });
 
   it("keeps the edited timeout after a save error and allows retry", async () => {
+    getOpenAIResponseHeaderTimeoutSettings.mockResolvedValueOnce({ enabled: true, seconds: 20 });
     const wrapper = mountView();
     await flushPromises();
     await openGatewayTab(wrapper);
