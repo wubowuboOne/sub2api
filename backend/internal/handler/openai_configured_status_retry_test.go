@@ -23,6 +23,8 @@ type openAIConfiguredStatusRetryUpstream struct {
 	service.HTTPUpstream
 	mu                sync.Mutex
 	accountIDs        []int64
+	requestBodies     [][]byte
+	requestHeaders    []http.Header
 	status            int
 	body              string
 	contentType       string
@@ -31,9 +33,15 @@ type openAIConfiguredStatusRetryUpstream struct {
 	bodyFactory       func() io.ReadCloser
 }
 
-func (u *openAIConfiguredStatusRetryUpstream) Do(_ *http.Request, _ string, accountID int64, _ int) (*http.Response, error) {
+func (u *openAIConfiguredStatusRetryUpstream) Do(req *http.Request, _ string, accountID int64, _ int) (*http.Response, error) {
+	bodyBytes, err := io.ReadAll(req.Body)
+	if err != nil {
+		return nil, err
+	}
 	u.mu.Lock()
 	u.accountIDs = append(u.accountIDs, accountID)
+	u.requestBodies = append(u.requestBodies, bodyBytes)
+	u.requestHeaders = append(u.requestHeaders, req.Header.Clone())
 	first := len(u.accountIDs) == 1
 	u.mu.Unlock()
 	if first && u.firstResponse != nil {
@@ -129,6 +137,20 @@ data: {"response":{"created_at":1793884529,"error":{"code":"bps_stream_error","m
 		mixed.body = strings.Replace(mixed.body, "event: response.failed", prelude.wire+"event: response.failed", 1)
 		cases = append(cases, mixed)
 	}
+	for _, kind := range []string{"reasoning", "compaction"} {
+		opaque := cases[0]
+		opaque.name = "bps_opaque_" + kind
+		opaque.accountID = 59327
+		opaque.retryCount = 2
+		prelude := ""
+		for _, event := range []string{"response.output_item.added", "response.output_item.done"} {
+			prelude += fmt.Sprintf(`data: {"type":%q,"output_index":0,"item":{"id":"opaque_attempt","type":%q,"encrypted_content":"ciphertext","summary":[]}}
+
+`, event, kind)
+		}
+		opaque.body = strings.Replace(opaque.body, "event: response.failed", prelude+"event: response.failed", 1)
+		cases = append(cases, opaque)
+	}
 	for _, tt := range cases {
 		for _, passthrough := range []bool{false, true} {
 			for _, queueHeartbeat := range []bool{false, true} {
@@ -172,10 +194,11 @@ data: {"response":{"created_at":1793884529,"error":{"code":"bps_stream_error","m
 					)
 					rec := httptest.NewRecorder()
 					c, _ := gin.CreateTestContext(rec)
-					requestBody, err := json.Marshal(map[string]any{"model": tt.model, "input": "hello", "stream": true})
+					requestBody, err := json.Marshal(map[string]any{"model": tt.model, "input": "hello", "stream": true, "prompt_cache_key": "stable-retry-cache"})
 					require.NoError(t, err)
 					c.Request = httptest.NewRequest(http.MethodPost, "/openai/v1/responses", bytes.NewReader(requestBody))
 					c.Request.Header.Set("Content-Type", "application/json")
+					c.Request.Header.Set("session_id", "stable-retry-session")
 					c.Set(string(middleware.ContextKeyAPIKey), &service.APIKey{
 						ID: 1805, GroupID: &groupID,
 						User:  &service.User{ID: 1705, Status: service.StatusActive},
@@ -194,7 +217,13 @@ data: {"response":{"created_at":1793884529,"error":{"code":"bps_stream_error","m
 
 					upstream.mu.Lock()
 					calls := append([]int64(nil), upstream.accountIDs...)
+					bodies := append([][]byte(nil), upstream.requestBodies...)
+					headers := append([]http.Header(nil), upstream.requestHeaders...)
 					upstream.mu.Unlock()
+					for i := 1; i < len(bodies); i++ {
+						require.Equal(t, bodies[0], bodies[i], "same-account retries must preserve the body and prompt cache key")
+						require.Equal(t, headers[0].Get("session_id"), headers[i].Get("session_id"))
+					}
 					wantCalls := make([]int64, tt.retryCount+1)
 					for i := range wantCalls {
 						wantCalls[i] = tt.accountID
@@ -234,6 +263,7 @@ func TestOpenAIMessagesConfiguredStatusRetriesSameAccount(t *testing.T) {
 		{name: "502_not_configured", retries: 10, retryStatus: http.StatusServiceUnavailable, wantCalls: 1},
 		{name: "real_output", retries: 10, retryStatus: http.StatusBadGateway, wantCalls: 1, realOutput: true},
 		{name: "recovers_after_two", retries: 10, retryStatus: http.StatusBadGateway, wantCalls: 3, successAfter: 2},
+		{name: "opaque_preamble_recovers_after_two", retries: 10, retryStatus: http.StatusBadGateway, wantCalls: 3, successAfter: 2, opaquePrelude: true},
 	} {
 		t.Run(test.name, func(t *testing.T) { runMessagesRetryCase(t, test) })
 	}
@@ -244,6 +274,7 @@ type messagesRetryCase struct {
 	name                                        string
 	retries, retryStatus, wantCalls             int
 	queueHeartbeat, streamHeartbeat, realOutput bool
+	opaquePrelude                               bool
 }
 
 type messagesRetryUsageRecorder struct {
@@ -300,6 +331,14 @@ event: response.failed
 data: {"response":{"created_at":1793894912,"error":{"code":"bps_stream_error","message":"Upstream request failed, please try again later","type":"bps_stream_error"},"id":"resp_02eb27c4c9368e16016aeca9fb97c487d2a1507e730fb38d7b","model":"gpt-6-luna","object":"response","status":"failed"},"type":"response.failed"}
 
 `,
+	}
+	if test.opaquePrelude {
+		for _, event := range []string{"response.output_item.added", "response.output_item.done"} {
+			prelude := fmt.Sprintf(`data: {"type":%q,"output_index":0,"item":{"id":"opaque_attempt","type":"reasoning","encrypted_content":"ciphertext","summary":[]}}
+
+`, event)
+			upstream.body = strings.Replace(upstream.body, "event: response.failed", prelude+"event: response.failed", 1)
+		}
 	}
 	if test.realOutput {
 		upstream.body = strings.Replace(upstream.body, "event: response.failed", "data: "+`{"type":"response.output_text.delta","delta":"partial"}`+"\n\nevent: response.failed", 1)

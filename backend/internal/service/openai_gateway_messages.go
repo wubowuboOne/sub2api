@@ -1057,6 +1057,7 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 	clientDisconnected := false
 	clientOutputStarted := false
 	firstClientOutputEvent := ""
+	firstClientOutputItemType := ""
 	preamble := newDefaultOpenAIFirstOutputStage()
 	defer func() {
 		if err := preamble.Close(); err != nil {
@@ -1205,7 +1206,7 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 					return true
 				}
 				if clientOutputStarted {
-					logOpenAIConfiguredRetrySuppressed(c.Request.Context(), c, account, false, requestID, firstClientOutputEvent, openAIStreamFailureStatus(payloadBytes, message))
+					logOpenAIConfiguredRetrySuppressed(c.Request.Context(), c, account, false, requestID, firstClientOutputEvent, firstClientOutputItemType, openAIStreamFailureStatus(payloadBytes, message))
 				}
 				message = s.recordOpenAIStreamUpstreamError(c, account, false, requestID, "http_error", payloadBytes, message)
 				errStatus, errType, errMsg := http.StatusBadGateway, "api_error", message
@@ -1262,6 +1263,7 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 				}
 				if !clientOutputStarted {
 					firstClientOutputEvent = eventType
+					firstClientOutputItemType = gjson.Get(payload, "item.type").String()
 					if !commitPreamble() {
 						break
 					}

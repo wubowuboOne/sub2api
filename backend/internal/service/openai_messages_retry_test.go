@@ -60,7 +60,6 @@ func TestOpenAIMessagesBPSFailurePreservesOutputBoundary(t *testing.T) {
 	for _, content := range []string{
 		`{"type":"response.output_text.delta","output_index":0,"delta":"partial"}`,
 		`{"type":"response.output_item.added","output_index":0,"item":{"type":"reasoning","summary":[]}}` + "\n\ndata: " + `{"type":"response.reasoning_summary_text.delta","output_index":0,"delta":"thinking"}`,
-		`{"type":"response.output_item.added","output_index":0,"item":{"type":"reasoning","encrypted_content":"ciphertext","summary":[]}}`,
 		`{"type":"response.output_item.added","output_index":0,"item":{"type":"function_call","id":"fc_done","call_id":"call_done","name":"lookup","arguments":""}}` + "\n\ndata: " + `{"type":"response.function_call_arguments.done","output_index":0,"arguments":""}`,
 	} {
 		t.Run(content, func(t *testing.T) {

@@ -1228,12 +1228,18 @@ func openAIStreamAddedEventStartsClientOutput(payload []byte, eventType string) 
 		}
 		switch strings.TrimSpace(item.Get("type").String()) {
 		case "reasoning":
-			if item.Get("encrypted_content").String() != "" {
+			encrypted := item.Get("encrypted_content")
+			if encrypted.Exists() && encrypted.Type != gjson.String && encrypted.Type != gjson.Null {
 				return true
 			}
+			// Opaque state cannot be consumed until this attempt succeeds. Keep it
+			// staged so a later response.failed can still use configured retries.
 			summary := item.Get("summary")
 			if !summary.IsArray() {
-				return itemDone
+				if summary.Exists() && summary.Type != gjson.Null {
+					return true
+				}
+				return itemDone && encrypted.String() == ""
 			}
 			for _, part := range summary.Array() {
 				text := part.Get("text")
@@ -1270,7 +1276,11 @@ func openAIStreamAddedEventStartsClientOutput(payload []byte, eventType string) 
 		case "custom_tool_call":
 			return itemDone || item.Get("input").String() != ""
 		case "compaction":
-			return itemDone || item.Get("encrypted_content").String() != ""
+			encrypted := item.Get("encrypted_content")
+			if encrypted.Exists() && encrypted.Type != gjson.String && encrypted.Type != gjson.Null {
+				return true
+			}
+			return itemDone && encrypted.String() == ""
 		default:
 			return true
 		}
@@ -1511,7 +1521,7 @@ func logOpenAICapacityFailoverSuppressed(
 	logger.FromContext(ctx).Warn("gateway.failover_suppressed_after_semantic_output", fields...)
 }
 
-func logOpenAIConfiguredRetrySuppressed(ctx context.Context, c *gin.Context, account *Account, passthrough bool, upstreamRequestID, firstOutputEvent string, statusCode int) {
+func logOpenAIConfiguredRetrySuppressed(ctx context.Context, c *gin.Context, account *Account, passthrough bool, upstreamRequestID, firstOutputEvent, firstOutputItemType string, statusCode int) {
 	if account == nil || account.Platform != PlatformOpenAI || !account.IsPoolMode() ||
 		account.GetPoolModeRetryCount() == 0 || !account.IsPoolModeRetryableStatus(statusCode) {
 		return
@@ -1522,6 +1532,7 @@ func logOpenAIConfiguredRetrySuppressed(ctx context.Context, c *gin.Context, acc
 		zap.Int("retry_limit", account.GetPoolModeRetryCount()),
 		zap.String("reason", "client_output_started"),
 		zap.String("first_output_event", firstOutputEvent),
+		zap.String("first_output_item_type", firstOutputItemType),
 		zap.Int("adjusted_written_size", OpenAICompactKeepaliveAdjustedWrittenSize(c)),
 		zap.Bool("passthrough", passthrough),
 		zap.String("upstream_request_id", strings.TrimSpace(upstreamRequestID)),
@@ -2143,6 +2154,7 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthroughWithImage(
 	failedMessage := ""
 	clientOutputStarted := false
 	firstClientOutputEvent := ""
+	firstClientOutputItemType := ""
 	codexFailureTerminal := account != nil && account.Platform == PlatformOpenAI
 	failureDelivered := false
 	suppressCurrentEvent := false
@@ -2155,6 +2167,7 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthroughWithImage(
 	upstreamRequestID := strings.TrimSpace(resp.Header.Get("x-request-id"))
 	// pendingLines 在首个可见输出前保留前导事件，确保无输出失败仍可安全 failover。
 	pendingLines := make([]string, 0, 8)
+	var pendingLineBytes int64
 
 	// ── 首个可见输出之前的下游 keepalive ──────────────────────────────────
 	//
@@ -2225,6 +2238,7 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthroughWithImage(
 			}
 		}
 		pendingLines = pendingLines[:0]
+		pendingLineBytes = 0
 		return true
 	}
 	ensureResponseFailedTerminal := func() {
@@ -2406,7 +2420,7 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthroughWithImage(
 					if eventType == "response.failed" {
 						// The stream cannot be replayed after semantic output. Preserve the
 						// terminal event, while making the upstream failure queryable.
-						logOpenAIConfiguredRetrySuppressed(ctx, c, account, true, upstreamRequestID, firstClientOutputEvent, openAIStreamFailureStatus(dataBytes, failedMessage))
+						logOpenAIConfiguredRetrySuppressed(ctx, c, account, true, upstreamRequestID, firstClientOutputEvent, firstClientOutputItemType, openAIStreamFailureStatus(dataBytes, failedMessage))
 						s.recordOpenAIStreamUpstreamError(c, account, true, upstreamRequestID, "stream_failed", dataBytes, failedMessage)
 					}
 				}
@@ -2470,6 +2484,7 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthroughWithImage(
 			lineStartsClientOutput = forceFlushFailedEvent || openAIStreamDataStartsClientOutput(trimmedData, eventType)
 			if lineStartsClientOutput && firstClientOutputEvent == "" {
 				firstClientOutputEvent = eventType
+				firstClientOutputItemType = gjson.GetBytes(dataBytes, "item.type").String()
 			}
 			if lineStartsClientOutput {
 				documentScanner.firstOutputDeadline = time.Time{}
@@ -2522,7 +2537,12 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthroughWithImage(
 
 		if !clientDisconnected && !failureDelivered && !suppressCurrentEvent {
 			if !clientOutputStarted && !lineStartsClientOutput {
+				lineBytes := int64(len(line)) + 1
+				if lineBytes > openAIFirstOutputStageMaxBytes-pendingLineBytes {
+					return resultWithUsage(), s.newOpenAIStreamFailoverError(c, account, true, upstreamRequestID, nil, "OpenAI passthrough pre-output staging limit exceeded")
+				}
 				pendingLines = append(pendingLines, line)
+				pendingLineBytes += lineBytes
 				continue
 			}
 			// 真实输出开始，心跳的使命结束。停拍是幂等的，且会与心跳 goroutine
