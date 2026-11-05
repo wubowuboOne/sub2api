@@ -268,6 +268,7 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 	failedMessage := ""
 	var grokScopedFailure error
 	clientOutputStarted := false
+	firstClientOutputEvent := ""
 	codexFailureTerminal := account != nil && account.IsOpenAIOAuthLike()
 	upstreamRequestID := strings.TrimSpace(resp.Header.Get("x-request-id"))
 	var streamEarlyErr error
@@ -636,6 +637,7 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 						// API-key bare errors are terminal too. Once output is committed, failover replay is unsafe. Keep
 						// the terminal event on the existing stream, but retain the upstream
 						// request ID and payload for operations diagnostics.
+						logOpenAIConfiguredRetrySuppressed(ctx, c, account, false, upstreamRequestID, firstClientOutputEvent, openAIStreamFailureStatus(dataBytes, failedMessage))
 						s.recordOpenAIStreamUpstreamError(c, account, false, upstreamRequestID, "stream_failed", dataBytes, failedMessage)
 					}
 				}
@@ -746,6 +748,9 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 				line = s.replaceModelInSSELine(line, mappedModel, originalModel)
 			}
 			startsClientOutput := forceFlushFailedEvent || openAIStreamDataStartsClientOutput(data, eventType)
+			if startsClientOutput && firstClientOutputEvent == "" {
+				firstClientOutputEvent = eventType
+			}
 			startsVisibleOutput := openAIStreamDataStartsVisibleOutput(data, eventType)
 			startsTTFTOutput := openAIStreamDataStartsTTFT(data, eventType, forceFlushFailedEvent, ttftMode)
 			metricPayload, metricType := metricEvent.observeLine("data: " + data)

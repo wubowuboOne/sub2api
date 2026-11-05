@@ -118,6 +118,8 @@ data: {"type":"keepalive"}
 			}{{false, false}, {true, false}, {false, true}, {true, true}} {
 				outputStarted := outputCase.started
 				t.Run(fmt.Sprintf("passthrough=%t/retry_status=%d/output_started=%t/queue_heartbeat=%t", passthrough, retryStatus, outputStarted, outputCase.queueHeartbeat), func(t *testing.T) {
+					logSink, restore := captureStructuredLog(t)
+					defer restore()
 					rec := httptest.NewRecorder()
 					c, _ := gin.CreateTestContext(rec)
 					c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
@@ -175,6 +177,14 @@ data: ` + payload + `
 					require.Equal(t, wantKind, upstream[0].Kind)
 					require.Equal(t, http.StatusBadGateway, upstream[0].UpstreamStatusCode)
 					require.Equal(t, account.ID, upstream[0].AccountID)
+					wantSuppressed := outputStarted && retryStatus == http.StatusBadGateway
+					require.Equal(t, wantSuppressed, logSink.ContainsMessage("openai.same_account_retry_suppressed"))
+					if wantSuppressed {
+						require.True(t, logSink.ContainsFieldValue("reason", "client_output_started"))
+						require.True(t, logSink.ContainsFieldValue("first_output_event", "response.output_text.delta"))
+						require.True(t, logSink.ContainsFieldValue("upstream_status", "502"))
+						require.True(t, logSink.ContainsField("adjusted_written_size"))
+					}
 				})
 			}
 		}
@@ -364,6 +374,11 @@ func TestOpenAIStreamEmptyContentBeforeFailureCanFailOver(t *testing.T) {
 		`{"type":"response.refusal.done","refusal":""}`,
 		`{"type":"response.content_part.done","part":{"type":"output_text","text":""}}`,
 		`{"type":"response.reasoning_summary_part.done","part":{"type":"summary_text","text":""}}`,
+		`{"type":"response.output_item.done","item":{"type":"reasoning","summary":[]}}`,
+		`{"type":"response.output_item.done","item":{"type":"reasoning","summary":[{"type":"summary_text","text":""}]}}`,
+		`{"type":"response.output_item.done","item":{"type":"message","content":[]}}`,
+		`{"type":"response.output_item.done","item":{"type":"message","content":[{"type":"output_text","text":""}]}}`,
+		`{"type":"response.output_item.done","item":{"type":"message","content":[{"type":"refusal","refusal":""}]}}`,
 	} {
 		for _, passthrough := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/passthrough=%t", payload, passthrough), func(t *testing.T) {
@@ -401,7 +416,20 @@ func TestOpenAIStreamReplayBoundaryPreservesContentAndToolCompletion(t *testing.
 		`{"type":"response.function_call_arguments.done","arguments":""}`,
 		`{"type":"response.custom_tool_call_input.done","input":""}`,
 		`{"type":"response.output_item.done","item":{"type":"function_call","arguments":""}}`,
+		`{"type":"response.output_item.done","item":{"type":"custom_tool_call","input":""}}`,
+		`{"type":"response.output_item.done","item":{"type":"compaction","encrypted_content":""}}`,
 		`{"type":"response.output_item.done","item":{"type":"reasoning","encrypted_content":"ciphertext"}}`,
+		`{"type":"response.output_item.done","item":{"type":"reasoning","encrypted_content":"ciphertext","summary":[]}}`,
+		`{"type":"response.output_item.done","item":{"type":"reasoning","summary":[{"type":"summary_text","text":"thinking"}]}}`,
+		`{"type":"response.output_item.done","item":{"type":"message","content":[{"type":"output_text","text":"answer"}]}}`,
+		`{"type":"response.output_item.done","item":{"type":"message","content":[{"type":"refusal","refusal":"no"}]}}`,
+		`{"type":"response.output_item.done","item":{"type":"reasoning"}}`,
+		`{"type":"response.output_item.done","item":{"type":"message","content":null}}`,
+		`{"type":"response.output_item.done","item":{"type":"reasoning","summary":[{"type":"summary_text","text":null}]}}`,
+		`{"type":"response.output_item.done","item":{"type":"message","content":[{"type":"output_text","text":null}]}}`,
+		`{"type":"response.output_item.done","item":{"type":"message","content":[{"type":"refusal","refusal":null}]}}`,
+		`{"type":"response.output_item.done","item":{"type":"unknown"}}`,
+		`{"type":"response.output_item.done","item":null}`,
 		`{"type":"response.output_text.delta","delta":null}`,
 		`{"type":"response.output_text.delta"}`,
 		`{"type":"response.output_text.delta","delta":{}}`,

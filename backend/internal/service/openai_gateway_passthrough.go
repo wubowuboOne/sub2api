@@ -1220,7 +1220,8 @@ func openAIStreamAddedEventStartsClientOutput(payload []byte, eventType string) 
 	}
 
 	switch strings.TrimSpace(eventType) {
-	case "response.output_item.added":
+	case "response.output_item.added", "response.output_item.done":
+		itemDone := strings.TrimSpace(eventType) == "response.output_item.done"
 		item := gjson.GetBytes(payload, "item")
 		if !item.Exists() || !item.IsObject() {
 			return true
@@ -1232,10 +1233,11 @@ func openAIStreamAddedEventStartsClientOutput(payload []byte, eventType string) 
 			}
 			summary := item.Get("summary")
 			if !summary.IsArray() {
-				return false
+				return itemDone
 			}
 			for _, part := range summary.Array() {
-				if strings.TrimSpace(part.Get("type").String()) != "summary_text" || part.Get("text").String() != "" {
+				text := part.Get("text")
+				if strings.TrimSpace(part.Get("type").String()) != "summary_text" || text.String() != "" || (itemDone && text.Type != gjson.String) {
 					return true
 				}
 			}
@@ -1243,16 +1245,18 @@ func openAIStreamAddedEventStartsClientOutput(payload []byte, eventType string) 
 		case "message":
 			content := item.Get("content")
 			if !content.IsArray() {
-				return false
+				return itemDone
 			}
 			for _, part := range content.Array() {
 				switch strings.TrimSpace(part.Get("type").String()) {
 				case "output_text":
-					if part.Get("text").String() != "" {
+					text := part.Get("text")
+					if text.String() != "" || (itemDone && text.Type != gjson.String) {
 						return true
 					}
 				case "refusal":
-					if part.Get("refusal").String() != "" {
+					refusal := part.Get("refusal")
+					if refusal.String() != "" || (itemDone && refusal.Type != gjson.String) {
 						return true
 					}
 				default:
@@ -1261,11 +1265,12 @@ func openAIStreamAddedEventStartsClientOutput(payload []byte, eventType string) 
 			}
 			return false
 		case "function_call":
-			return item.Get("arguments").String() != ""
+			// Completion can trigger a tool even when its arguments are empty.
+			return itemDone || item.Get("arguments").String() != ""
 		case "custom_tool_call":
-			return item.Get("input").String() != ""
+			return itemDone || item.Get("input").String() != ""
 		case "compaction":
-			return item.Get("encrypted_content").String() != ""
+			return itemDone || item.Get("encrypted_content").String() != ""
 		default:
 			return true
 		}
@@ -1310,7 +1315,7 @@ func openAIStreamDataStartsClientOutput(data, eventType string) bool {
 		// （content_policy / invalid_request 等）维持原样转发，保留上游错误细节。
 		payload := []byte(trimmed)
 		return !openAIStreamFailedEventShouldFailover(payload, extractOpenAISSEErrorMessage(payload))
-	case "response.output_item.added", "response.content_part.added", "response.reasoning_summary_part.added",
+	case "response.output_item.added", "response.output_item.done", "response.content_part.added", "response.reasoning_summary_part.added",
 		"response.content_part.done", "response.reasoning_summary_part.done":
 		return openAIStreamAddedEventStartsClientOutput([]byte(trimmed), eventType)
 	case "response.output_text.delta", "response.reasoning_summary_text.delta", "response.reasoning_text.delta",
@@ -1504,6 +1509,23 @@ func logOpenAICapacityFailoverSuppressed(
 		)
 	}
 	logger.FromContext(ctx).Warn("gateway.failover_suppressed_after_semantic_output", fields...)
+}
+
+func logOpenAIConfiguredRetrySuppressed(ctx context.Context, c *gin.Context, account *Account, passthrough bool, upstreamRequestID, firstOutputEvent string, statusCode int) {
+	if account == nil || account.Platform != PlatformOpenAI || !account.IsPoolMode() ||
+		account.GetPoolModeRetryCount() == 0 || !account.IsPoolModeRetryableStatus(statusCode) {
+		return
+	}
+	logger.FromContext(ctx).Warn("openai.same_account_retry_suppressed",
+		zap.Int64("account_id", account.ID),
+		zap.Int("upstream_status", statusCode),
+		zap.Int("retry_limit", account.GetPoolModeRetryCount()),
+		zap.String("reason", "client_output_started"),
+		zap.String("first_output_event", firstOutputEvent),
+		zap.Int("adjusted_written_size", OpenAICompactKeepaliveAdjustedWrittenSize(c)),
+		zap.Bool("passthrough", passthrough),
+		zap.String("upstream_request_id", strings.TrimSpace(upstreamRequestID)),
+	)
 }
 
 // openAICapacityShedRetryableClientCode 是把上游容量降载错误转发给客户端时改写
@@ -2120,6 +2142,7 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthroughWithImage(
 	capacityFailoverSuppressedLogged := false
 	failedMessage := ""
 	clientOutputStarted := false
+	firstClientOutputEvent := ""
 	codexFailureTerminal := account != nil && account.Platform == PlatformOpenAI
 	failureDelivered := false
 	suppressCurrentEvent := false
@@ -2383,6 +2406,7 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthroughWithImage(
 					if eventType == "response.failed" {
 						// The stream cannot be replayed after semantic output. Preserve the
 						// terminal event, while making the upstream failure queryable.
+						logOpenAIConfiguredRetrySuppressed(ctx, c, account, true, upstreamRequestID, firstClientOutputEvent, openAIStreamFailureStatus(dataBytes, failedMessage))
 						s.recordOpenAIStreamUpstreamError(c, account, true, upstreamRequestID, "stream_failed", dataBytes, failedMessage)
 					}
 				}
@@ -2444,6 +2468,9 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthroughWithImage(
 				line = "data: " + string(sanitizedData)
 			}
 			lineStartsClientOutput = forceFlushFailedEvent || openAIStreamDataStartsClientOutput(trimmedData, eventType)
+			if lineStartsClientOutput && firstClientOutputEvent == "" {
+				firstClientOutputEvent = eventType
+			}
 			if lineStartsClientOutput {
 				documentScanner.firstOutputDeadline = time.Time{}
 			}
