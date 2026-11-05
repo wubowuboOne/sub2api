@@ -246,6 +246,16 @@ type messagesRetryCase struct {
 	queueHeartbeat, streamHeartbeat, realOutput bool
 }
 
+type messagesRetryUsageRecorder struct {
+	service.UsageLogRepository
+	rows []service.UsageLog
+}
+
+func (r *messagesRetryUsageRecorder) Create(_ context.Context, usage *service.UsageLog) (bool, error) {
+	r.rows = append(r.rows, *usage)
+	return true, nil
+}
+
 type messagesRetryHeartbeatWriter struct {
 	gin.ResponseWriter
 	beat chan<- struct{}
@@ -335,8 +345,9 @@ data: {"type":"response.completed","response":{"id":"resp_messages_success","sta
 	}
 	billingCache := service.NewBillingCacheService(nil, nil, nil, nil, nil, nil, cfg, nil)
 	t.Cleanup(billingCache.Stop)
+	usageRepo := &messagesRetryUsageRecorder{}
 	gateway := service.NewOpenAIGatewayService(
-		accountRepo, nil, nil, nil, nil, nil, nil, nil, cfg, nil, nil,
+		accountRepo, nil, usageRepo, nil, nil, nil, nil, nil, cfg, nil, nil,
 		service.NewBillingService(cfg, nil), nil, billingCache, upstream,
 		&service.DeferredService{}, nil, nil, nil, nil, nil, nil, nil,
 	)
@@ -400,5 +411,15 @@ data: {"type":"response.completed","response":{"id":"resp_messages_success","sta
 		require.Equal(t, wantKind, event.Kind)
 		require.Equal(t, http.StatusBadGateway, event.UpstreamStatusCode)
 		require.Equal(t, accountID, event.AccountID)
+	}
+	if test.successAfter > 0 {
+		require.Len(t, usageRepo.rows, 1, "retry attempts must not create separate usage records")
+		require.Equal(t, 1, usageRepo.rows[0].InputTokens)
+		require.Equal(t, 1, usageRepo.rows[0].OutputTokens)
+	} else if test.realOutput {
+		require.Len(t, usageRepo.rows, 1, "a terminal failure may retain one partial usage record")
+		require.Zero(t, usageRepo.rows[0].ActualCost)
+	} else {
+		require.Empty(t, usageRepo.rows, "pre-output retries and exhausted failover must not bill attempts")
 	}
 }
