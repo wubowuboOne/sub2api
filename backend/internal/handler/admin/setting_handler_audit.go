@@ -33,6 +33,9 @@ func (h *SettingHandler) auditSettingsUpdate(c *gin.Context, before *service.Sys
 
 func diffSettings(before *service.SystemSettings, after *service.SystemSettings, beforeAuthSourceDefaults *service.AuthSourceDefaultSettings, afterAuthSourceDefaults *service.AuthSourceDefaultSettings, req UpdateSettingsRequest) []string {
 	changed := make([]string, 0, 20)
+	if !reflect.DeepEqual(before.SmartOpsHiddenMenuItems, after.SmartOpsHiddenMenuItems) {
+		changed = append(changed, "smart_ops_hidden_menu_items")
+	}
 	if before.RequestCaptureEnabled != after.RequestCaptureEnabled {
 		changed = append(changed, "request_capture_enabled")
 	}
@@ -608,6 +611,15 @@ func diffSettings(before *service.SystemSettings, after *service.SystemSettings,
 		changed = append(changed, "openai_advanced_scheduler_weight_session_sticky")
 	}
 	// 余额、订阅到期与账号限额通知
+	if before.BalanceForecastEnabled != after.BalanceForecastEnabled {
+		changed = append(changed, "balance_forecast_enabled")
+	}
+	if before.BalanceForecastThresholdHours != after.BalanceForecastThresholdHours {
+		changed = append(changed, "balance_forecast_threshold_hours")
+	}
+	if before.BalanceForecastMaxNotifications != after.BalanceForecastMaxNotifications {
+		changed = append(changed, "balance_forecast_max_notifications")
+	}
 	if before.BalanceLowNotifyEnabled != after.BalanceLowNotifyEnabled {
 		changed = append(changed, "balance_low_notify_enabled")
 	}

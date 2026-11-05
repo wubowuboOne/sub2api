@@ -10,6 +10,8 @@ import zhCommon from "@/i18n/locales/zh/common";
 import zhSettings from "@/i18n/locales/zh/admin/settings";
 import SettingsView from "../SettingsView.vue";
 import { apiClient } from "@/api/client";
+import NewFeatureBadge from "@/components/common/NewFeatureBadge.vue";
+import { NEW_FEATURE_NOTICES } from "@/constants/newFeatureNotices";
 
 enableAutoUnmount(afterEach);
 
@@ -773,17 +775,85 @@ describe("admin SettingsView payment visible method controls", () => {
     adminSettingsFetch.mockResolvedValue(undefined);
   });
 
+  it.each([0, 1])("dismisses the forecast notice from real entry %s and keeps it dismissed on remount", async (index) => {
+    const wrapper = mountView();
+    await flushPromises();
+    const badges = () => wrapper.findAllComponents(NewFeatureBadge)
+      .filter(b => b.props('noticeId') === NEW_FEATURE_NOTICES.balanceForecast)
+      .flatMap(b => b.findAll('[data-testid="new-feature-badge"]'));
+    expect(badges()).toHaveLength(2);
+    await badges()[index]!.trigger('click');
+    await flushPromises();
+    expect(badges()).toHaveLength(0);
+    wrapper.unmount();
+    const refreshed = mountView();
+    await flushPromises();
+    expect(refreshed.findAllComponents(NewFeatureBadge)
+      .filter(b => b.props('noticeId') === NEW_FEATURE_NOTICES.balanceForecast)
+      .flatMap(b => b.findAll('[data-testid="new-feature-badge"]'))).toHaveLength(0);
+  });
+
+  it("loads, saves, and disables forecast independently of amount notifications", async () => {
+    getSettings.mockResolvedValue({ ...baseSettingsResponse, balance_forecast_enabled: true, balance_forecast_threshold_hours: 6.5, balance_forecast_max_notifications: 2, balance_low_notify_enabled: true });
+    const wrapper = mountView();
+    await flushPromises();
+    expect((wrapper.get('[data-testid="forecast-hours"]').element as HTMLInputElement).value).toBe('6.5');
+    await wrapper.get('[data-testid="forecast-enabled"]').setValue(false);
+    await wrapper.get('form').trigger('submit');
+    await flushPromises();
+    expect(updateSettings).toHaveBeenCalledWith(expect.objectContaining({ balance_forecast_enabled: false, balance_forecast_threshold_hours: 6.5, balance_forecast_max_notifications: 2, balance_low_notify_enabled: true }));
+  });
+
+  it("rejects an invalid forecast lead time before updating any settings", async () => {
+    const wrapper = mountView();
+    await flushPromises();
+    await wrapper.get('[data-testid="forecast-hours"]').setValue('169');
+    await wrapper.get('form').trigger('submit');
+    await flushPromises();
+    expect(updateSettings).not.toHaveBeenCalled();
+    expect(showError).toHaveBeenCalled();
+  });
+
   it("shares one dismissible notice between the feature tab and its settings section", async () => {
     const wrapper = mountView();
     await flushPromises();
 
-    const badges = wrapper.findAll('[data-testid="new-feature-badge"]');
+    const badges = wrapper.findAllComponents(NewFeatureBadge)
+      .filter((badge) => badge.props('noticeId') === NEW_FEATURE_NOTICES.protocolFeatureSwitches);
     expect(badges).toHaveLength(2);
     await badges[0]!.trigger("click");
     await flushPromises();
-    expect(wrapper.findAll('[data-testid="new-feature-badge"]')).toHaveLength(0);
+    expect(wrapper.findAllComponents(NewFeatureBadge)
+      .filter((badge) => badge.props('noticeId') === NEW_FEATURE_NOTICES.protocolFeatureSwitches)
+      .flatMap((badge) => badge.findAll('[data-testid="new-feature-badge"]'))).toHaveLength(0);
+    expect(wrapper.findAllComponents(NewFeatureBadge)
+      .filter((badge) => badge.props('noticeId') === NEW_FEATURE_NOTICES.serverlessIPRouting)
+      .flatMap((badge) => badge.findAll('[data-testid="new-feature-badge"]'))).toHaveLength(1);
     expect(wrapper.get("#settings-tab-features").attributes("aria-selected")).toBe("false");
     expect(updateSettings).not.toHaveBeenCalled();
+  });
+
+  it("dismisses the gateway notice across the tab and both routing controls without dismissing protocol settings", async () => {
+    const get = vi.spyOn(apiClient, 'get').mockResolvedValue({ data: { config: { enabled: false, pods: [], regions: [] }, pods: [], stats: {} } });
+    try {
+      const wrapper = mountView();
+      await flushPromises();
+      await openGatewayTab(wrapper);
+      const gatewayBadges = () => wrapper.findAllComponents(NewFeatureBadge)
+        .filter((badge) => badge.props('noticeId') === NEW_FEATURE_NOTICES.serverlessIPRouting)
+        .flatMap((badge) => badge.findAll('[data-testid="new-feature-badge"]'));
+      expect(gatewayBadges()).toHaveLength(3);
+      await gatewayBadges()[0]!.trigger('click');
+      await flushPromises();
+      expect(gatewayBadges()).toHaveLength(0);
+      expect(wrapper.findAllComponents(NewFeatureBadge)
+        .filter((badge) => badge.props('noticeId') === NEW_FEATURE_NOTICES.protocolFeatureSwitches)
+        .flatMap((badge) => badge.findAll('[data-testid="new-feature-badge"]'))).toHaveLength(2);
+      expect(wrapper.get('#settings-tab-gateway').attributes('aria-selected')).toBe('true');
+      expect(updateSettings).not.toHaveBeenCalled();
+    } finally {
+      get.mockRestore();
+    }
   });
 
   it("keeps the IP risk form on IP Audit without loading or saving it from Settings", async () => {

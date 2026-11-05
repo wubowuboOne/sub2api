@@ -17,6 +17,14 @@ export default {
         payment: 'Payment',
       },
       features: {
+        smartOpsSidebar: {
+          title: 'Smart operations sidebar',
+          description: 'Choose which smart operations entries appear in the sidebar. Saving applies to all administrators. Hiding a menu does not stop background jobs, change feature settings, or block direct page access.',
+          showAll: 'Show all',
+          hideAll: 'Hide all',
+          count: '{visible} / {total} entries selected',
+          hint: 'The sidebar group disappears when all entries are hidden. Existing feature requirements, such as request capture being enabled, still apply.'
+        },
         excelBpsImages: {
           mode: 'Image transport',
           modeRelay: 'Temporary HTTPS relay (default)',
@@ -1035,6 +1043,15 @@ export default {
         refundEnabled: 'Allow Refund',
         allowUserRefund: 'Allow User Refund',
         enableConflict: '{method} already has an enabled provider instance: {provider}. Disable the existing instance before switching.',
+      },
+      balanceForecast: {
+        title: "Balance exhaustion forecast",
+        description: "Estimate time remaining from settled balance spending over the last 24 hours. Off by default; independent of amount alerts.",
+        enabled: "Enable forecast alerts",
+        threshold: "Lead time (hours, up to 168)",
+        cap: "Notifications per warning episode (1–10)",
+        hint: "Defaults: 12 hours, 3 rounds, at most one round per hour. Reuses the recharge link, verified notification emails and unsubscribe preferences. Insufficient samples or settlement coverage suppress delivery. Uncertain delivery consumes an allowance. A new episode requires one continuous hour above 120% of the threshold.",
+        invalid: "Lead time must be positive and at most 168 hours; the notification cap must be an integer from 1 to 10.",
       },
       balanceNotify: {
         title: 'Balance Low Notification',
