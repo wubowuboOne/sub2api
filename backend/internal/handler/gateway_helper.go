@@ -15,7 +15,7 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-const gatewayStreamHeartbeatBytesKey = "gateway_stream_heartbeat_bytes"
+const gatewayStreamHeartbeatBytesKey = service.GatewayStreamHeartbeatBytesKey
 
 // requireAPIKeyQueueCapability records a group-gated capability that this
 // request actually uses, so a queued key wait re-checks exactly that capability

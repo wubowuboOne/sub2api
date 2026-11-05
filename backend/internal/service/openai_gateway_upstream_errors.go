@@ -403,7 +403,6 @@ func newOpenAIUpstreamFailoverError(
 		failoverErr.SameAccountRetryDelay = openAIRequestScopedRetryDelay(responseHeaders, responseBody)
 	}
 	if isOpenAIRequestBodyTooLargeError(statusCode, upstreamMsg, responseBody) {
-		failoverErr.RetryableOnSameAccount = false
 		failoverErr.RequestScopedTransient = false
 		failoverErr.Scope = GatewayFailureScopeAccount
 		failoverErr.Reason = openAIRequestBodyTooLargeReason
@@ -704,12 +703,19 @@ func (s *OpenAIGatewayService) handleErrorResponse(
 			Detail:             upstreamDetail,
 		})
 		s.handleOpenAIAccountUpstreamError(ctx, account, resp.StatusCode, resp.Header, body, requestedModel...)
+		retryableOnSameAccount := false
+		if account != nil {
+			retryableOnSameAccount = account.IsPoolMode()
+			if retryableOnSameAccount {
+				retryableOnSameAccount = account.IsPoolModeRetryableStatus(resp.StatusCode)
+			}
+		}
 		return nil, newOpenAIUpstreamFailoverError(
 			resp.StatusCode,
 			resp.Header,
 			body,
 			upstreamMsg,
-			false,
+			retryableOnSameAccount,
 		)
 	}
 

@@ -77,7 +77,7 @@ func TestOpenAIRequestBodyLimitFailover_HTTP413SwitchesAccountsBeforeWrite(t *te
 			require.Equal(t, NextAccountRetry, failoverErr.NextAccountAction)
 			require.Equal(t, http.StatusRequestEntityTooLarge, failoverErr.ClientStatusCode)
 			require.Equal(t, "Request payload is too large", failoverErr.ClientMessage)
-			require.False(t, failoverErr.RetryableOnSameAccount, "a body limit requires another account, not another attempt on the same account")
+			require.True(t, failoverErr.RetryableOnSameAccount, "configured status 413 should allow a same-account retry")
 			require.False(t, c.Writer.Written(), "account failover must happen before downstream output is committed")
 			require.Empty(t, rec.Body.String())
 			require.True(t, body.closed)

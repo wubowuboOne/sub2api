@@ -14,6 +14,8 @@ import (
 // openAICompactSSEKeepaliveKey 存放 body-signal compact 请求的下游 SSE 心跳器。
 const openAICompactSSEKeepaliveKey = "openai_compact_sse_keepalive"
 
+const GatewayStreamHeartbeatBytesKey = "gateway_stream_heartbeat_bytes"
+
 // openAICompactSSEKeepalive 在 compact 上游 unary 等待期间向下游写 SSE 注释行
 // 心跳。上游 /responses/compact 在模型处理期间不发送任何字节（大上下文可长达
 // 数分钟），下游若经过反向代理（Nginx/Cloudflare Tunnel 等），零字节静默会触发
@@ -186,6 +188,10 @@ func OpenAICompactKeepaliveAdjustedWrittenSize(c *gin.Context) int {
 	if value, ok := c.Get(openAIStreamKeepaliveBytesKey); ok {
 		streamKeepaliveBytes, _ = value.(int)
 	}
+	gatewayHeartbeatBytes := 0
+	if value, ok := c.Get(GatewayStreamHeartbeatBytesKey); ok {
+		gatewayHeartbeatBytes, _ = value.(int)
+	}
 	size := c.Writer.Size()
 	compactKeepaliveBytes := 0
 	if value, ok := c.Get(openAICompactSSEKeepaliveKey); ok {
@@ -199,7 +205,7 @@ func OpenAICompactKeepaliveAdjustedWrittenSize(c *gin.Context) int {
 	if size < 0 {
 		return size
 	}
-	keepaliveBytes := compactKeepaliveBytes + streamKeepaliveBytes
+	keepaliveBytes := compactKeepaliveBytes + streamKeepaliveBytes + gatewayHeartbeatBytes
 	if keepaliveBytes <= 0 {
 		return size
 	}

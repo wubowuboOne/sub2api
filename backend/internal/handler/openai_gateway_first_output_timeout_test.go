@@ -37,6 +37,26 @@ func TestOpenAIFirstOutputFailoverStopsAfterOneAccountSwitch(t *testing.T) {
 	require.Equal(t, 1, count)
 }
 
+func TestOpenAIForwardMayFailoverAfterQueueHeartbeat(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	requestContext, _ := gin.CreateTestContext(recorder)
+	before := service.OpenAICompactKeepaliveAdjustedWrittenSize(requestContext)
+	written, err := requestContext.Writer.WriteString(string(SSEPingFormatComment))
+	require.NoError(t, err)
+	recordGatewayStreamHeartbeat(requestContext, written)
+	requestContext.Writer.Flush()
+
+	require.True(t, gatewayStreamHasOnlyHeartbeats(requestContext))
+	require.Equal(t, before, service.OpenAICompactKeepaliveAdjustedWrittenSize(requestContext))
+	require.True(t, openAIForwardMayFailover(requestContext, before, &service.UpstreamFailoverError{}))
+
+	_, err = requestContext.Writer.WriteString(partialMessageStartSSE)
+	require.NoError(t, err)
+	require.False(t, gatewayStreamHasOnlyHeartbeats(requestContext))
+	require.False(t, openAIForwardMayFailover(requestContext, before, &service.UpstreamFailoverError{}))
+}
+
 func TestOpenAIRequestAllowsFailoverReplayStopsCanceledClient(t *testing.T) {
 	require.False(t, openAIRequestAllowsFailoverReplay(nil))
 

@@ -79,6 +79,108 @@ func TestStreamFailedEventCapacityShedRetriesOnSameAccount(t *testing.T) {
 	require.False(t, openAIStreamFailedEventRetryableOnSameAccount(nonPool, other, "boom"))
 }
 
+func TestStreamFailedEventUnknown502UsesConfiguredRetryStatus(t *testing.T) {
+	message := "Upstream request failed, please try again later"
+	payload := []byte(`{"type":"response.failed","response":{"status":"failed","error":{"code":"bps_stream_error","type":"bps_stream_error","message":"Upstream request failed, please try again later"}}}`)
+
+	account := &Account{
+		ID:       2,
+		Platform: PlatformOpenAI,
+		Type:     AccountTypeAPIKey,
+		Credentials: map[string]any{
+			"pool_mode":                    true,
+			"pool_mode_retry_status_codes": []any{float64(http.StatusBadGateway)},
+		},
+	}
+	require.Equal(t, http.StatusBadGateway, openAIStreamFailedEventSemanticStatus(payload, message))
+	require.True(t, openAIStreamFailedEventShouldFailover(payload, message))
+	require.True(t, openAIStreamFailedEventRetryableOnSameAccount(account, payload, message))
+
+	account.Credentials["pool_mode_retry_status_codes"] = []any{float64(http.StatusServiceUnavailable)}
+	require.False(t, openAIStreamFailedEventRetryableOnSameAccount(account, payload, message), "same-account retry must still honor the configured status list")
+}
+
+func TestOpenAIStreamBPSFailureUsesConfiguredSameAccountRetry(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	payload := `{"response":{"created_at":1793885885,"error":{"code":"bps_stream_error","message":"Upstream request failed, please try again later","type":"bps_stream_error"},"id":"resp_037f0034131ed6e3016aec868d50b087d088b14cc5997d7a17","model":"gpt-6-luna","object":"response","status":"failed"},"type":"response.failed"}`
+	metadata := `data: {"type":"response.created","response":{"id":"resp_bps"}}
+
+data: {"type":"response.in_progress"}
+
+data: {"type":"keepalive"}
+
+`
+	for _, passthrough := range []bool{false, true} {
+		for _, retryStatus := range []int{http.StatusBadGateway, http.StatusServiceUnavailable} {
+			for _, outputCase := range []struct {
+				started        bool
+				queueHeartbeat bool
+			}{{false, false}, {true, false}, {false, true}, {true, true}} {
+				outputStarted := outputCase.started
+				t.Run(fmt.Sprintf("passthrough=%t/retry_status=%d/output_started=%t/queue_heartbeat=%t", passthrough, retryStatus, outputStarted, outputCase.queueHeartbeat), func(t *testing.T) {
+					rec := httptest.NewRecorder()
+					c, _ := gin.CreateTestContext(rec)
+					c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+					heartbeat := ""
+					if outputCase.queueHeartbeat {
+						heartbeat = `:
+
+`
+						written, err := c.Writer.WriteString(heartbeat)
+						require.NoError(t, err)
+						c.Set(GatewayStreamHeartbeatBytesKey, written)
+						c.Writer.Flush()
+					}
+					svc := &OpenAIGatewayService{cfg: &config.Config{Gateway: config.GatewayConfig{MaxLineSize: defaultMaxLineSize}}}
+					account := &Account{ID: 59323, Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Credentials: map[string]any{
+						"pool_mode":                    true,
+						"pool_mode_retry_status_codes": []any{float64(retryStatus)},
+					}}
+					stream := metadata
+					if outputStarted {
+						stream += `data: {"type":"response.output_text.delta","delta":"partial"}
+
+`
+					}
+					stream += `event: response.failed
+data: ` + payload + `
+
+`
+					resp := &http.Response{StatusCode: http.StatusOK, Header: http.Header{"X-Request-Id": []string{"dff2539f-5616-495f-84d6-f6fe9eca2058"}}, Body: io.NopCloser(strings.NewReader(stream))}
+					var err error
+					if passthrough {
+						_, err = svc.handleStreamingResponsePassthrough(c.Request.Context(), resp, c, account, time.Now(), "gpt-6-luna", "gpt-6-luna")
+					} else {
+						_, err = svc.handleStreamingResponse(c.Request.Context(), resp, c, account, time.Now(), "gpt-6-luna", "gpt-6-luna")
+					}
+					require.Error(t, err)
+					var failoverErr *UpstreamFailoverError
+					wantKind := "failover"
+					if outputStarted {
+						require.NotErrorAs(t, err, &failoverErr, "committed model output cannot be replayed")
+						require.Contains(t, rec.Body.String(), "partial")
+						wantKind = "stream_failed"
+					} else {
+						require.ErrorAs(t, err, &failoverErr)
+						require.Equal(t, http.StatusBadGateway, failoverErr.StatusCode)
+						require.Equal(t, retryStatus == http.StatusBadGateway, failoverErr.RetryableOnSameAccount)
+						require.Equal(t, outputCase.queueHeartbeat, c.Writer.Written(), "only queue heartbeats may be committed before retry")
+						require.Equal(t, heartbeat, rec.Body.String())
+					}
+					events, ok := c.Get(OpsUpstreamErrorsKey)
+					require.True(t, ok)
+					upstream, ok := events.([]*OpsUpstreamErrorEvent)
+					require.True(t, ok)
+					require.Len(t, upstream, 1)
+					require.Equal(t, wantKind, upstream[0].Kind)
+					require.Equal(t, http.StatusBadGateway, upstream[0].UpstreamStatusCode)
+					require.Equal(t, account.ID, upstream[0].AccountID)
+				})
+			}
+		}
+	}
+}
+
 func TestOpenAIHTTPCapacityShedIsRequestScopedForOAuthAccounts(t *testing.T) {
 	payload := []byte(`{"error":{"type":"server_error","message":"Our servers are currently overloaded. Please try again later."}}`)
 	failoverErr := newOpenAIUpstreamFailoverError(
