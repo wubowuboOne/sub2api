@@ -1308,6 +1308,29 @@ func openAIStreamAddedEventStartsClientOutput(payload []byte, eventType string) 
 	}
 }
 
+// Opaque items are upstream progress, but remain private until usable output or
+// a successful terminal. Keep timeout and delivery decisions independent.
+func openAIStreamDataIsOpaquePreamble(data, eventType string) bool {
+	switch strings.TrimSpace(eventType) {
+	case "response.output_item.added", "response.output_item.done":
+	default:
+		return false
+	}
+	payload := []byte(data)
+	if !gjson.ValidBytes(payload) {
+		return false
+	}
+	item := gjson.GetBytes(payload, "item")
+	switch strings.TrimSpace(item.Get("type").String()) {
+	case "reasoning", "compaction":
+	default:
+		return false
+	}
+	encrypted := item.Get("encrypted_content")
+	return encrypted.Type == gjson.String && encrypted.String() != "" &&
+		!openAIStreamAddedEventStartsClientOutput(payload, eventType)
+}
+
 func openAIStreamDataStartsClientOutput(data, eventType string) bool {
 	trimmed := strings.TrimSpace(data)
 	if trimmed == "" {
@@ -2149,6 +2172,7 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthroughWithImage(
 	terminalEventType := ""
 	terminalSuccessful := false
 	semanticOutputSeen := false
+	completedOpaqueOutputSeen := false
 	budgetProgressPending := false
 	capacityFailoverSuppressedLogged := false
 	failedMessage := ""
@@ -2486,8 +2510,15 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthroughWithImage(
 				firstClientOutputEvent = eventType
 				firstClientOutputItemType = gjson.GetBytes(dataBytes, "item.type").String()
 			}
-			if lineStartsClientOutput {
+			opaquePreamble := !lineStartsClientOutput && openAIStreamDataIsOpaquePreamble(trimmedData, eventType)
+			if opaquePreamble && eventType == "response.output_item.done" {
+				completedOpaqueOutputSeen = true
+			}
+			if lineStartsClientOutput || opaquePreamble {
 				documentScanner.firstOutputDeadline = time.Time{}
+			}
+			if opaquePreamble {
+				budgetProgressPending = true
 			}
 			if lineStartsClientOutput && trimmedData != "[DONE]" && !openAIStreamEventTypeIsTerminal(eventType) {
 				semanticOutputSeen = true
@@ -2498,7 +2529,7 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthroughWithImage(
 			// to the client) are silent upstream refusals: fail over instead of
 			// recording a successful 0/0 usage turn (issue #5009).
 			if (eventType == "response.completed" || eventType == "response.done") &&
-				!sawFailedEvent && !semanticOutputSeen && !clientOutputStarted &&
+				!sawFailedEvent && !semanticOutputSeen && !completedOpaqueOutputSeen && !clientOutputStarted &&
 				openAIResponsesCompletedEventIsEmpty(dataBytes, usage) {
 				return resultWithUsage(), newOpenAIResponsesEmptyCompletedFailoverError(c, account, upstreamRequestID)
 			}

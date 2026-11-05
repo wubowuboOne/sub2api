@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/server/middleware"
@@ -31,6 +32,42 @@ type openAIConfiguredStatusRetryUpstream struct {
 	upstreamRequestID string
 	firstResponse     *http.Response
 	bodyFactory       func() io.ReadCloser
+}
+
+type openAIConfiguredStatusRetryCache struct {
+	service.GatewayCache
+	mu       sync.Mutex
+	sessions map[string]int64
+}
+
+func (c *openAIConfiguredStatusRetryCache) GetSessionAccountID(_ context.Context, groupID int64, sessionHash string) (int64, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if id := c.sessions[fmt.Sprintf("%d:%s", groupID, sessionHash)]; id > 0 {
+		return id, nil
+	}
+	return 0, service.ErrStickySessionNotFound
+}
+
+func (c *openAIConfiguredStatusRetryCache) SetSessionAccountID(_ context.Context, groupID int64, sessionHash string, accountID int64, _ time.Duration) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.sessions == nil {
+		c.sessions = make(map[string]int64)
+	}
+	c.sessions[fmt.Sprintf("%d:%s", groupID, sessionHash)] = accountID
+	return nil
+}
+
+func (c *openAIConfiguredStatusRetryCache) RefreshSessionTTL(context.Context, int64, string, time.Duration) error {
+	return nil
+}
+
+func (c *openAIConfiguredStatusRetryCache) DeleteSessionAccountID(_ context.Context, groupID int64, sessionHash string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	delete(c.sessions, fmt.Sprintf("%d:%s", groupID, sessionHash))
+	return nil
 }
 
 func (u *openAIConfiguredStatusRetryUpstream) Do(req *http.Request, _ string, accountID int64, _ int) (*http.Response, error) {
@@ -71,6 +108,7 @@ func TestOpenAIResponsesConfiguredStatusRetriesSameAccount(t *testing.T) {
 		body              string
 		contentType       string
 		bodyLimitFirst    bool
+		secondAccount     bool
 	}{
 		{
 			name:              "bps_stream_error",
@@ -142,6 +180,7 @@ data: {"response":{"created_at":1793884529,"error":{"code":"bps_stream_error","m
 		opaque.name = "bps_opaque_" + kind
 		opaque.accountID = 59327
 		opaque.retryCount = 2
+		opaque.secondAccount = true
 		prelude := ""
 		for _, event := range []string{"response.output_item.added", "response.output_item.done"} {
 			prelude += fmt.Sprintf(`data: {"type":%q,"output_index":0,"item":{"id":"opaque_attempt","type":%q,"encrypted_content":"ciphertext","summary":[]}}
@@ -167,6 +206,18 @@ data: {"response":{"created_at":1793884529,"error":{"code":"bps_stream_error","m
 						},
 						Extra: map[string]any{"openai_passthrough": passthrough, "openai_responses_supported": true},
 					}}}
+					var stickyCache service.GatewayCache
+					if tt.secondAccount {
+						stickyCache = &openAIConfiguredStatusRetryCache{}
+						fallback := accountRepo.accounts[0]
+						fallback.ID = tt.accountID + 100000
+						fallback.Priority = 100
+						fallback.Credentials = map[string]any{
+							"api_key": "sk-fallback", "base_url": "https://api.example.test",
+							"pool_mode": true, "pool_mode_retry_count": float64(0),
+						}
+						accountRepo.accounts = append(accountRepo.accounts, fallback)
+					}
 					cfg := &config.Config{RunMode: config.RunModeSimple}
 					if tt.bodyLimitFirst {
 						accountRepo.accounts[0].Credentials["pool_mode_retry_status_codes"] = []any{float64(http.StatusRequestEntityTooLarge), float64(http.StatusBadGateway)}
@@ -174,6 +225,15 @@ data: {"response":{"created_at":1793884529,"error":{"code":"bps_stream_error","m
 					cfg.Default.RateMultiplier = 1
 					cfg.Gateway.MaxAccountSwitches = 1
 					upstream := &openAIConfiguredStatusRetryUpstream{status: tt.status, body: tt.body, contentType: tt.contentType, upstreamRequestID: tt.upstreamRequestID}
+					if tt.secondAccount {
+						upstream.bodyFactory = func() io.ReadCloser {
+							// A fresh selection would now prefer the fallback; retries must
+							// retain the original account through its sticky binding.
+							accountRepo.accounts[0].Priority = 100
+							accountRepo.accounts[1].Priority = 1
+							return io.NopCloser(strings.NewReader(tt.body))
+						}
+					}
 					if tt.bodyLimitFirst {
 						upstream.firstResponse = &http.Response{
 							StatusCode: http.StatusRequestEntityTooLarge,
@@ -184,7 +244,7 @@ data: {"response":{"created_at":1793884529,"error":{"code":"bps_stream_error","m
 					billingCache := service.NewBillingCacheService(nil, nil, nil, nil, nil, nil, cfg, nil)
 					t.Cleanup(billingCache.Stop)
 					gateway := service.NewOpenAIGatewayService(
-						accountRepo, nil, nil, nil, nil, nil, nil, nil, cfg, nil, nil,
+						accountRepo, nil, nil, nil, nil, nil, nil, stickyCache, cfg, nil, nil,
 						service.NewBillingService(cfg, nil), nil, billingCache, upstream,
 						&service.DeferredService{}, nil, nil, nil, nil, nil, nil, nil,
 					)
@@ -228,6 +288,9 @@ data: {"response":{"created_at":1793884529,"error":{"code":"bps_stream_error","m
 					for i := range wantCalls {
 						wantCalls[i] = tt.accountID
 					}
+					if tt.secondAccount {
+						wantCalls = append(wantCalls, tt.accountID+100000)
+					}
 					require.Equal(t, wantCalls, calls, "configured retries must reuse the same account and then stop")
 					if tt.bodyLimitFirst {
 						require.NotContains(t, rec.Body.String(), "response.created", "failed attempt metadata must stay buffered")
@@ -246,7 +309,7 @@ data: {"response":{"created_at":1793884529,"error":{"code":"bps_stream_error","m
 							status = http.StatusRequestEntityTooLarge
 						}
 						require.Equal(t, status, event.UpstreamStatusCode)
-						require.Equal(t, tt.accountID, event.AccountID)
+						require.Equal(t, wantCalls[i], event.AccountID)
 						require.Equal(t, tt.upstreamRequestID, event.UpstreamRequestID)
 					}
 				})

@@ -282,6 +282,7 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 	var metricEvent openAISSEMetricEvent
 	eventInProgress := false
 	eventStartsClientOutput := false
+	eventStartsUpstreamProgress := false
 	eventStartsTTFTOutput := false
 	eventStartsLegacyTTFTOutput := false
 	eventShouldFlush := false
@@ -302,7 +303,7 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 		logger.LegacyPrintf("service.openai_gateway", "Client disconnected during streaming, continuing to drain upstream for billing")
 	}
 	completeGuardedEvent := func(queueDrained bool) {
-		completedProgressEvent := eventStartsClientOutput
+		completedProgressEvent := eventStartsUpstreamProgress
 		completedTTFTEvent := eventStartsTTFTOutput
 		completedLegacyTTFTEvent := eventStartsLegacyTTFTOutput
 		if completedProgressEvent && !terminalFailurePending && !sawFailedEvent {
@@ -311,7 +312,7 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 		shouldFlush := eventShouldFlush || (queueDrained && clientOutputStarted)
 		eventInProgress = false
 		if !clientDisconnected {
-			if completedProgressEvent {
+			if eventStartsClientOutput {
 				applyAttemptResponseHeaders()
 			}
 			if shouldFlush {
@@ -325,7 +326,6 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 			}
 		}
 		if completedProgressEvent && !firstOutputProgressObserved {
-			firstOutputScanGuard.Store(false)
 			firstOutputProgressObserved = true
 			stopFirstOutputTimer()
 		}
@@ -335,6 +335,7 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 		}
 		legacyTTFTObserved = legacyTTFTObserved || completedLegacyTTFTEvent
 		eventStartsClientOutput = false
+		eventStartsUpstreamProgress = false
 		eventStartsTTFTOutput = false
 		eventStartsLegacyTTFTOutput = false
 		eventShouldFlush = false
@@ -457,7 +458,11 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 		if scanErr == nil {
 			return nil, nil, false
 		}
-		if errors.Is(scanErr, errOpenAIFirstOutputScannerLimit) && !firstOutputProgressObserved {
+		// Upstream progress can stop the timeout while opaque items are still
+		// private. Preserve atomic staging on scanner failures until commit.
+		privateFirstOutput := firstOutputStage != nil && !firstOutputStage.closed &&
+			!clientDisconnected && !openAIStreamClientOutputStarted(c, clientOutputStarted)
+		if errors.Is(scanErr, errOpenAIFirstOutputScannerLimit) && privateFirstOutput {
 			logger.LegacyPrintf("service.openai_gateway", "SSE token exceeded guarded first-output limit: account=%d limit=%d error=%v", account.ID, openAIFirstOutputStageMaxBytes+openAIFirstOutputScannerFramingAllowance, scanErr)
 			failoverErr := s.newOpenAIStreamFailoverError(
 				c, account, false, upstreamRequestID, nil,
@@ -466,7 +471,7 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 			failoverErr.SafeToFailoverAfterWrite = true
 			return resultWithUsage(), failoverErr, true
 		}
-		if errors.Is(scanErr, bufio.ErrTooLong) && stageFirstOutput && !firstOutputProgressObserved {
+		if errors.Is(scanErr, bufio.ErrTooLong) && privateFirstOutput {
 			logger.LegacyPrintf("service.openai_gateway", "SSE line too long before first output: account=%d max_size=%d error=%v", account.ID, maxLineSize, scanErr)
 			failoverErr := s.newOpenAIStreamFailoverError(
 				c, account, false, upstreamRequestID, nil,
@@ -766,6 +771,7 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 			}
 			if stageFirstOutput {
 				eventStartsClientOutput = eventStartsClientOutput || startsClientOutput
+				eventStartsUpstreamProgress = eventStartsUpstreamProgress || startsClientOutput || openAIStreamDataIsOpaquePreamble(data, eventType)
 				eventStartsTTFTOutput = eventStartsTTFTOutput || startsTTFTOutput
 				eventStartsLegacyTTFTOutput = eventStartsLegacyTTFTOutput || startsLegacyTTFTOutput
 				if startsClientOutput {
@@ -832,6 +838,7 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 				terminalFailurePending = false
 				eventInProgress = false
 				eventStartsClientOutput = false
+				eventStartsUpstreamProgress = false
 				eventStartsTTFTOutput = false
 				eventStartsLegacyTTFTOutput = false
 				eventShouldFlush = false
@@ -841,6 +848,7 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 				terminalFailurePending = false
 				eventInProgress = false
 				eventStartsClientOutput = false
+				eventStartsUpstreamProgress = false
 				eventStartsTTFTOutput = false
 				eventStartsLegacyTTFTOutput = false
 				eventShouldFlush = false
