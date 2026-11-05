@@ -2,6 +2,7 @@ package handler
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -27,6 +28,7 @@ type openAIConfiguredStatusRetryUpstream struct {
 	contentType       string
 	upstreamRequestID string
 	firstResponse     *http.Response
+	bodyFactory       func() io.ReadCloser
 }
 
 func (u *openAIConfiguredStatusRetryUpstream) Do(_ *http.Request, _ string, accountID int64, _ int) (*http.Response, error) {
@@ -37,10 +39,14 @@ func (u *openAIConfiguredStatusRetryUpstream) Do(_ *http.Request, _ string, acco
 	if first && u.firstResponse != nil {
 		return u.firstResponse, nil
 	}
+	body := io.NopCloser(strings.NewReader(u.body))
+	if u.bodyFactory != nil {
+		body = u.bodyFactory()
+	}
 	return &http.Response{
 		StatusCode: u.status,
 		Header:     http.Header{"Content-Type": []string{u.contentType}, "X-Request-Id": []string{u.upstreamRequestID}},
-		Body:       io.NopCloser(strings.NewReader(u.body)),
+		Body:       body,
 	}, nil
 }
 
@@ -217,5 +223,182 @@ data: {"response":{"created_at":1793884529,"error":{"code":"bps_stream_error","m
 				})
 			}
 		}
+	}
+}
+
+func TestOpenAIMessagesConfiguredStatusRetriesSameAccount(t *testing.T) {
+	for _, test := range []messagesRetryCase{
+		{name: "configured_ten", retries: 10, retryStatus: http.StatusBadGateway, wantCalls: 11},
+		{name: "queue_heartbeat", retries: 2, retryStatus: http.StatusBadGateway, wantCalls: 3, queueHeartbeat: true},
+		{name: "stream_heartbeat", retries: 2, retryStatus: http.StatusBadGateway, wantCalls: 3, streamHeartbeat: true},
+		{name: "502_not_configured", retries: 10, retryStatus: http.StatusServiceUnavailable, wantCalls: 1},
+		{name: "real_output", retries: 10, retryStatus: http.StatusBadGateway, wantCalls: 1, realOutput: true},
+		{name: "recovers_after_two", retries: 10, retryStatus: http.StatusBadGateway, wantCalls: 3, successAfter: 2},
+	} {
+		t.Run(test.name, func(t *testing.T) { runMessagesRetryCase(t, test) })
+	}
+}
+
+type messagesRetryCase struct {
+	successAfter                                int
+	name                                        string
+	retries, retryStatus, wantCalls             int
+	queueHeartbeat, streamHeartbeat, realOutput bool
+}
+
+type messagesRetryHeartbeatWriter struct {
+	gin.ResponseWriter
+	beat chan<- struct{}
+}
+
+func (w *messagesRetryHeartbeatWriter) Write(p []byte) (int, error) {
+	n, err := w.ResponseWriter.Write(p)
+	if err == nil && bytes.Contains(p, []byte("event: ping")) {
+		select {
+		case w.beat <- struct{}{}:
+		default:
+		}
+	}
+	return n, err
+}
+
+func runMessagesRetryCase(t *testing.T, test messagesRetryCase) {
+	t.Helper()
+	gin.SetMode(gin.TestMode)
+	groupID := int64(4205)
+	accountID := int64(59328)
+	accountRepo := &openAIWSFailoverHandlerAccountRepoStub{accounts: []service.Account{{
+		ID: accountID, Name: "messages-configured-retry", Platform: service.PlatformOpenAI,
+		Type: service.AccountTypeAPIKey, Status: service.StatusActive, Schedulable: true, Priority: 1,
+		GroupIDs: []int64{groupID},
+		Credentials: map[string]any{
+			"api_key": "sk-test", "base_url": "https://api.example.test",
+			"pool_mode": true, "pool_mode_retry_count": float64(test.retries),
+			"pool_mode_retry_status_codes": []any{float64(test.retryStatus)},
+		},
+		Extra: map[string]any{"openai_responses_supported": true},
+	}}}
+	cfg := &config.Config{RunMode: config.RunModeSimple}
+	cfg.Default.RateMultiplier = 1
+	cfg.Gateway.MaxAccountSwitches = 1
+	upstream := &openAIConfiguredStatusRetryUpstream{
+		status: http.StatusOK, contentType: "text/event-stream", upstreamRequestID: "29f351b8-a09e-4b48-9058-15642b01cb6f",
+		body: `event: response.created
+data: {"type":"response.created","response":{"id":"resp_bps_messages","status":"in_progress"}}
+
+event: response.failed
+data: {"response":{"created_at":1793894912,"error":{"code":"bps_stream_error","message":"Upstream request failed, please try again later","type":"bps_stream_error"},"id":"resp_02eb27c4c9368e16016aeca9fb97c487d2a1507e730fb38d7b","model":"gpt-6-luna","object":"response","status":"failed"},"type":"response.failed"}
+
+`,
+	}
+	if test.realOutput {
+		upstream.body = strings.Replace(upstream.body, "event: response.failed", "data: "+`{"type":"response.output_text.delta","delta":"partial"}`+"\n\nevent: response.failed", 1)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	beat := make(chan struct{}, 1)
+	if test.successAfter > 0 {
+		upstream.bodyFactory = func() io.ReadCloser {
+			upstream.mu.Lock()
+			attempt := len(upstream.accountIDs)
+			upstream.mu.Unlock()
+			body := upstream.body
+			if attempt > test.successAfter {
+				body = `data: {"type":"response.created","response":{"id":"resp_messages_success"}}
+
+data: {"type":"response.output_text.delta","output_index":0,"delta":"recovered answer"}
+
+data: {"type":"response.completed","response":{"id":"resp_messages_success","status":"completed","output":[],"usage":{"input_tokens":1,"output_tokens":1}}}
+
+`
+			}
+			return io.NopCloser(strings.NewReader(body))
+		}
+	}
+	if test.streamHeartbeat {
+		cfg.Gateway.StreamKeepaliveInterval = 1
+		cfg.Gateway.StreamDataIntervalTimeout = 4
+		upstream.bodyFactory = func() io.ReadCloser {
+			reader, writer := io.Pipe()
+			t.Cleanup(func() { _ = reader.Close() })
+			go func() {
+				defer writer.Close()
+				select {
+				case <-beat:
+					_, _ = io.WriteString(writer, upstream.body)
+				case <-ctx.Done():
+					_ = writer.CloseWithError(ctx.Err())
+				}
+			}()
+			return reader
+		}
+	}
+	billingCache := service.NewBillingCacheService(nil, nil, nil, nil, nil, nil, cfg, nil)
+	t.Cleanup(billingCache.Stop)
+	gateway := service.NewOpenAIGatewayService(
+		accountRepo, nil, nil, nil, nil, nil, nil, nil, cfg, nil, nil,
+		service.NewBillingService(cfg, nil), nil, billingCache, upstream,
+		&service.DeferredService{}, nil, nil, nil, nil, nil, nil, nil,
+	)
+	h := NewOpenAIGatewayHandler(gateway, service.NewConcurrencyService(nil), billingCache,
+		service.NewAPIKeyService(nil, nil, nil, nil, nil, nil, cfg), nil, nil, nil, nil, cfg)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(`{"model":"gpt-6-sol","max_tokens":32,"messages":[{"role":"user","content":"hello"}],"stream":true}`))
+	c.Request.Header.Set("Content-Type", "application/json")
+	c.Request = c.Request.WithContext(ctx)
+	if test.streamHeartbeat {
+		c.Writer = &messagesRetryHeartbeatWriter{ResponseWriter: c.Writer, beat: beat}
+	}
+	c.Set(string(middleware.ContextKeyAPIKey), &service.APIKey{
+		ID: 1805, GroupID: &groupID,
+		User:  &service.User{ID: 1705, Status: service.StatusActive},
+		Group: &service.Group{ID: groupID, Platform: service.PlatformOpenAI, Status: service.StatusActive, AllowMessagesDispatch: true},
+	})
+	c.Set(string(middleware.ContextKeyUser), middleware.AuthSubject{UserID: 1705, Concurrency: 0})
+	if test.queueHeartbeat {
+		c.Writer.Header().Set("Content-Type", "text/event-stream")
+		written, err := c.Writer.WriteString(string(SSEPingFormatClaude))
+		require.NoError(t, err)
+		recordGatewayStreamHeartbeat(c, written)
+		c.Writer.Flush()
+	}
+	h.Messages(c)
+	upstream.mu.Lock()
+	calls := append([]int64(nil), upstream.accountIDs...)
+	upstream.mu.Unlock()
+	require.Len(t, calls, test.wantCalls, "Messages must honor retry count, status and output boundaries")
+	for _, id := range calls {
+		require.Equal(t, accountID, id)
+	}
+	wantKind := "failover"
+	wantEvents := test.wantCalls
+	if test.successAfter > 0 {
+		wantEvents = test.successAfter
+		require.Equal(t, http.StatusOK, rec.Code)
+		require.Contains(t, rec.Body.String(), "recovered answer")
+		require.Equal(t, 1, strings.Count(rec.Body.String(), "event: message_start"))
+		require.Equal(t, 1, strings.Count(rec.Body.String(), "event: message_stop"))
+		require.NotContains(t, rec.Body.String(), "resp_bps_messages")
+		require.NotContains(t, rec.Body.String(), "event: error")
+	} else if test.realOutput {
+		wantKind = "http_error"
+		require.Contains(t, rec.Body.String(), "partial")
+	} else {
+		require.NotContains(t, rec.Body.String(), "event: message_start")
+	}
+	if test.streamHeartbeat {
+		require.Contains(t, rec.Body.String(), "event: ping")
+		require.Contains(t, rec.Body.String(), "event: error")
+	}
+	value, ok := c.Get(service.OpsUpstreamErrorsKey)
+	require.True(t, ok)
+	events, ok := value.([]*service.OpsUpstreamErrorEvent)
+	require.True(t, ok)
+	require.Len(t, events, wantEvents)
+	for _, event := range events {
+		require.Equal(t, wantKind, event.Kind)
+		require.Equal(t, http.StatusBadGateway, event.UpstreamStatusCode)
+		require.Equal(t, accountID, event.AccountID)
 	}
 }

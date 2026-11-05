@@ -1056,6 +1056,26 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 	firstChunk := true
 	clientDisconnected := false
 	clientOutputStarted := false
+	firstClientOutputEvent := ""
+	preamble := newDefaultOpenAIFirstOutputStage()
+	defer func() {
+		if err := preamble.Close(); err != nil {
+			logger.L().Warn("openai messages stream: preamble cleanup failed", zap.Error(err), zap.String("request_id", requestID))
+		}
+	}()
+	commitPreamble := func() bool {
+		if clientOutputStarted {
+			return true
+		}
+		writeStreamHeaders()
+		if err := preamble.CommitTo(c.Writer); err != nil {
+			clientDisconnected = true
+			logger.L().Info("openai messages stream: client disconnected while flushing preamble", zap.Error(err), zap.String("request_id", requestID))
+			return false
+		}
+		clientOutputStarted = true
+		return true
+	}
 	var streamFailoverErr error
 	var streamNonFailoverErr error
 	terminalEventType := ""
@@ -1180,9 +1200,12 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 				if isBareErrorEvent {
 					shouldFailover = openAIStreamErrorEventShouldFailover(payloadBytes, message)
 				}
-				if !clientOutputStarted && shouldFailover {
+				if !clientDisconnected && !clientOutputStarted && shouldFailover {
 					streamFailoverErr = s.newOpenAIStreamFailoverErrorWithModel(c, account, false, requestID, payloadBytes, message, upstreamModel, resp.Header)
 					return true
+				}
+				if clientOutputStarted {
+					logOpenAIConfiguredRetrySuppressed(c.Request.Context(), c, account, false, requestID, firstClientOutputEvent, openAIStreamFailureStatus(payloadBytes, message))
 				}
 				message = s.recordOpenAIStreamUpstreamError(c, account, false, requestID, "http_error", payloadBytes, message)
 				errStatus, errType, errMsg := http.StatusBadGateway, "api_error", message
@@ -1198,7 +1221,7 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 					MarkResponseCommitted(c)
 				}
 				if !clientDisconnected {
-					if !clientOutputStarted {
+					if !c.Writer.Written() {
 						writeAnthropicError(c, errStatus, errType, errMsg)
 						clientOutputStarted = true
 					} else {
@@ -1215,6 +1238,7 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 
 		// Convert to Anthropic events
 		events := apicompat.ResponsesEventToAnthropicEvents(&event, state)
+		stagePreamble := !clientOutputStarted && !isTerminalEvent && !openAIStreamDataStartsClientOutput(payload, eventType)
 		if !clientDisconnected {
 			for _, evt := range events {
 				sse, err := apicompat.ResponsesAnthropicEventToSSE(evt)
@@ -1225,7 +1249,23 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 					)
 					continue
 				}
-				writeStreamHeaders()
+				// Keep message_start and empty block events private until output or
+				// a successful terminal, so failed attempts can still be replayed.
+				if stagePreamble {
+					if _, err := preamble.WriteString(sse); err != nil {
+						logger.L().Warn("openai messages stream: preamble staging failed", zap.Error(err), zap.String("request_id", requestID))
+						streamFailoverErr = s.newOpenAIStreamFailoverError(c, account, false, requestID, nil, "OpenAI messages pre-output staging failed")
+						_ = resp.Body.Close()
+						return true
+					}
+					continue
+				}
+				if !clientOutputStarted {
+					firstClientOutputEvent = eventType
+					if !commitPreamble() {
+						break
+					}
+				}
 				if _, err := fmt.Fprint(c.Writer, sse); err != nil {
 					clientDisconnected = true
 					logger.L().Info("openai messages stream: client disconnected, continuing to drain upstream for billing",
@@ -1236,7 +1276,7 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 				clientOutputStarted = true
 			}
 		}
-		if len(events) > 0 && !clientDisconnected {
+		if len(events) > 0 && !clientDisconnected && clientOutputStarted {
 			c.Writer.Flush()
 		}
 		return isTerminalEvent
@@ -1251,6 +1291,9 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 			return resultWithUsage(), streamNonFailoverErr
 		}
 		if finalEvents := apicompat.FinalizeResponsesAnthropicStream(state); len(finalEvents) > 0 && !clientDisconnected {
+			if !commitPreamble() {
+				return resultWithUsage(), nil
+			}
 			for _, evt := range finalEvents {
 				sse, err := apicompat.ResponsesAnthropicEventToSSE(evt)
 				if err != nil {
@@ -1436,7 +1479,9 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 			}
 			// Send Anthropic-format ping event
 			writeStreamHeaders()
-			if _, err := fmt.Fprint(c.Writer, "event: ping\ndata: {\"type\":\"ping\"}\n\n"); err != nil {
+			written, err := fmt.Fprint(c.Writer, "event: ping\ndata: {\"type\":\"ping\"}\n\n")
+			recordOpenAIStreamKeepaliveBytes(c, written)
+			if err != nil {
 				// Client disconnected
 				logger.L().Info("openai messages stream: client disconnected during keepalive",
 					zap.String("request_id", requestID),
@@ -1444,7 +1489,6 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 				clientDisconnected = true
 				continue
 			}
-			clientOutputStarted = true
 			c.Writer.Flush()
 		}
 	}
