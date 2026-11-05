@@ -17,6 +17,14 @@ export default {
         payment: '支付设置',
       },
       features: {
+        smartOpsSidebar: {
+          title: '智能运维侧边栏',
+          description: '选择侧边栏中展示的智能运维入口。保存后对所有管理员生效；仅隐藏菜单，不会停止后台任务、修改功能配置或禁止直接访问页面。',
+          showAll: '全部显示',
+          hideAll: '全部隐藏',
+          count: '已选择 {visible} / {total} 个入口',
+          hint: '全部隐藏后，侧边栏将收起智能运维分组。请求采集等入口仍受原有功能启用条件控制。'
+        },
         excelBpsImages: {
           mode: '图片传输方式',
           modeRelay: '临时 HTTPS 中转（默认）',
@@ -1030,6 +1038,15 @@ export default {
         refundEnabled: '允许退款',
         allowUserRefund: '允许用户退款',
         enableConflict: '{method} 已有启用中的服务商实例：{provider}。请先停用现有实例后再启用或切换。',
+      },
+      balanceForecast: {
+        title: "余额耗尽预测提醒",
+        description: "按最近 24 小时已结算的余额消费估算剩余时间；默认关闭，与金额提醒独立。",
+        enabled: "启用预测提醒",
+        threshold: "提前提醒（小时，最多 168）",
+        cap: "每个连续预警期通知上限（1–10）",
+        hint: "默认提前 12 小时、最多 3 次；每小时至多一轮。复用充值链接、已验证通知邮箱和退订偏好。低样本或结算覆盖不足时不发送；发送结果不确定也占用额度。剩余时长持续一小时高于阈值的 120% 后，才开始新的预警期。",
+        invalid: "预测提前时间须为 0–168 小时之间的正数，通知上限须为 1–10 的整数。",
       },
       balanceNotify: {
         title: '余额不足提醒',

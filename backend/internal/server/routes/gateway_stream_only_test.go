@@ -26,12 +26,21 @@ func TestGatewayRoutesGroupStreamOnlyMountedOnEveryGatewayChain(t *testing.T) {
 		{group: "antigravityV1", next: "antigravityV1.Use(requireGroupAnthropic)"},
 		{group: "antigravityV1Beta", next: "antigravityV1Beta.Use(requireGroupGoogle)"},
 	} {
+		allowlistChain := chain.group + ".Use(groupModelAllowlist)"
+		if chain.group == "gateway" || chain.group == "antigravityV1" {
+			allowlistChain = chain.group + ".Use(groupModelAllowlist, apiKeyModelPolicy)"
+		}
 		re := regexp.MustCompile(
-			regexp.QuoteMeta(chain.group+".Use(groupModelAllowlist)") +
+			regexp.QuoteMeta(allowlistChain) +
 				`\s*` + regexp.QuoteMeta(chain.group+".Use(groupCodexCLIOnly, groupBlockSubagents)") +
-				`\s*` + regexp.QuoteMeta(chain.group+".Use(groupStreamOnly)") +
-				`[\s\S]{0,200}?` + regexp.QuoteMeta(chain.next))
-		require.Regexp(t, re, source, "%s chain must mount groupStreamOnly right after the allowlist", chain.group)
+				`\s*` + regexp.QuoteMeta(chain.group+".Use(groupStreamOnly)"))
+		mounts := re.FindAllStringIndex(source, -1)
+		require.Len(t, mounts, 1, "%s chain must mount groupStreamOnly right after the allowlist", chain.group)
+		next := strings.Index(source, chain.next)
+		require.NotEqual(t, -1, next, "%s chain must mount its target middleware", chain.group)
+		// Other admission middleware and comments may sit between these mounts;
+		// compare their positions without imposing an unrelated source-length cap.
+		require.Less(t, mounts[0][1], next, "%s chain must enforce groupStreamOnly before target middleware", chain.group)
 	}
 }
 

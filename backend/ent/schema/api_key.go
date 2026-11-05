@@ -51,6 +51,16 @@ func (APIKey) Fields() []ent.Field {
 		field.String("status").
 			MaxLen(20).
 			Default(domain.StatusActive),
+		field.JSON("model_mapping", map[string]string{}).
+			Default(map[string]string{}).
+			Comment("Administrator-managed exact model aliases for this API key"),
+		field.String("reasoning_effort").
+			MaxLen(16).
+			Default("").
+			Comment("Administrator-managed reasoning effort override; empty follows the request"),
+		field.Bool("allow_long_context").
+			Default(true).
+			Comment("Administrator-managed permission to use long context requests"),
 		field.Time("last_used_at").
 			Optional().
 			Nillable().

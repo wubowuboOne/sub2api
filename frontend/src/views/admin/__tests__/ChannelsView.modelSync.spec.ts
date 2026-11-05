@@ -1,3 +1,5 @@
+vi.mock('@/stores/auth', () => ({ useAuthStore: () => ({ user: { id: 41 } }) }))
+vi.mock('@/components/common/NewFeatureBadge.vue', () => ({ default: { template: '<span />' } }))
 import { defineComponent } from 'vue'
 import { flushPromises, mount } from '@vue/test-utils'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -98,7 +100,8 @@ describe('ChannelsView pricing model sync', () => {
     ['opencode_go', true],
     ['typesafe', true],
     ['command_code', false],
-    ['cline', false]
+    ['cline', false],
+    ['mistral', true]
   ] as const)('offers pricing model sync for %s only when its pricing catalog exists', async (platform, expected) => {
     const wrapper = mountView()
     await openDialog(wrapper)

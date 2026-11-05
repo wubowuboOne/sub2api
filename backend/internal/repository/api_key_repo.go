@@ -75,6 +75,7 @@ func (r *apiKeyRepository) create(ctx context.Context, key *service.APIKey) erro
 	created, err := builder.Save(ctx)
 	if err == nil {
 		key.ID = created.ID
+		key.AllowLongContext = created.AllowLongContext
 		key.LastUsedAt = created.LastUsedAt
 		key.CreatedAt = created.CreatedAt
 		key.UpdatedAt = created.UpdatedAt
@@ -144,6 +145,9 @@ func (r *apiKeyRepository) GetByKeyForAuth(ctx context.Context, key string) (*se
 			apikey.FieldGroupID,
 			apikey.FieldName,
 			apikey.FieldStatus,
+			apikey.FieldModelMapping,
+			apikey.FieldReasoningEffort,
+			apikey.FieldAllowLongContext,
 			apikey.FieldIPWhitelist,
 			apikey.FieldIPBlacklist,
 			apikey.FieldQuota,
@@ -283,6 +287,19 @@ func (r *apiKeyRepository) update(ctx context.Context, key *service.APIKey, fiel
 	}
 	if fields.Name {
 		builder.SetName(key.Name)
+	}
+	if fields.ModelMapping {
+		mapping := key.ModelMapping
+		if mapping == nil {
+			mapping = map[string]string{}
+		}
+		builder.SetModelMapping(mapping)
+	}
+	if fields.ReasoningEffort {
+		builder.SetReasoningEffort(key.ReasoningEffort)
+	}
+	if fields.AllowLongContext {
+		builder.SetAllowLongContext(key.AllowLongContext)
 	}
 	if fields.Status {
 		builder.SetStatus(key.Status)
@@ -944,6 +961,9 @@ func apiKeyEntityToService(m *dbent.APIKey) *service.APIKey {
 		Key:              m.Key,
 		Name:             m.Name,
 		Status:           m.Status,
+		ModelMapping:     m.ModelMapping,
+		ReasoningEffort:  m.ReasoningEffort,
+		AllowLongContext: m.AllowLongContext,
 		IPWhitelist:      m.IPWhitelist,
 		IPBlacklist:      m.IPBlacklist,
 		LastUsedAt:       m.LastUsedAt,

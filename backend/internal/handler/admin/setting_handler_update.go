@@ -314,6 +314,9 @@ type UpdateSettingsRequest struct {
 	OpenAIAdvancedSchedulerWeightSessionSticky         *string  `json:"openai_advanced_scheduler_weight_session_sticky"`
 
 	// 余额不足提醒
+	BalanceForecastEnabled          *bool                   `json:"balance_forecast_enabled"`
+	BalanceForecastThresholdHours   *float64                `json:"balance_forecast_threshold_hours" binding:"omitempty,gt=0"`
+	BalanceForecastMaxNotifications *int                    `json:"balance_forecast_max_notifications" binding:"omitempty,gt=0"`
 	BalanceLowNotifyEnabled         *bool                   `json:"balance_low_notify_enabled"`
 	BalanceLowNotifyThreshold       *float64                `json:"balance_low_notify_threshold"`
 	BalanceLowNotifyRechargeURL     *string                 `json:"balance_low_notify_recharge_url"`
@@ -444,6 +447,8 @@ type UpdateSettingsRequest struct {
 	ExcelBPSImageStorageMiB               *int    `json:"excel_bps_image_storage_mib"`
 	ExcelBPSImageStorageEntries           *int    `json:"excel_bps_image_storage_entries"`
 	ExcelBPSImageTTLMinutes               *int    `json:"excel_bps_image_ttl_minutes"`
+
+	SmartOpsHiddenMenuItems []string `json:"smart_ops_hidden_menu_items" binding:"max=100,dive,max=128"`
 }
 
 // UpdateSettings 更新系统设置
@@ -1828,6 +1833,12 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		MaxClaudeCodeVersion:                   req.MaxClaudeCodeVersion,
 		AllowUngroupedKeyScheduling:            req.AllowUngroupedKeyScheduling,
 		BackendModeEnabled:                     req.BackendModeEnabled,
+		SmartOpsHiddenMenuItems: func() []string {
+			if _, sent := sentFields["smart_ops_hidden_menu_items"]; sent {
+				return req.SmartOpsHiddenMenuItems
+			}
+			return previousSettings.SmartOpsHiddenMenuItems
+		}(),
 		RequestCaptureEnabled: func() bool {
 			if req.RequestCaptureEnabled != nil {
 				return *req.RequestCaptureEnabled
@@ -2237,6 +2248,9 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		OpenAIAdvancedSchedulerWeightUpstreamCost:     stringSetting(req.OpenAIAdvancedSchedulerWeightUpstreamCost, previousSettings.OpenAIAdvancedSchedulerWeightUpstreamCost),
 		OpenAIAdvancedSchedulerWeightPreviousResponse: stringSetting(req.OpenAIAdvancedSchedulerWeightPreviousResponse, previousSettings.OpenAIAdvancedSchedulerWeightPreviousResponse),
 		OpenAIAdvancedSchedulerWeightSessionSticky:    stringSetting(req.OpenAIAdvancedSchedulerWeightSessionSticky, previousSettings.OpenAIAdvancedSchedulerWeightSessionSticky),
+		BalanceForecastEnabled:                        boolValueOrDefault(req.BalanceForecastEnabled, previousSettings.BalanceForecastEnabled),
+		BalanceForecastThresholdHours:                 float64ValueOrDefault(req.BalanceForecastThresholdHours, previousSettings.BalanceForecastThresholdHours),
+		BalanceForecastMaxNotifications:               intValueOrDefault(req.BalanceForecastMaxNotifications, previousSettings.BalanceForecastMaxNotifications),
 		BalanceLowNotifyEnabled: func() bool {
 			if req.BalanceLowNotifyEnabled != nil {
 				return *req.BalanceLowNotifyEnabled
@@ -2812,6 +2826,9 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		OpenAIAdvancedSchedulerEffectiveWeightUpstreamCost:     updatedSettings.OpenAIAdvancedSchedulerEffectiveWeightUpstreamCost,
 		OpenAIAdvancedSchedulerEffectiveWeightPreviousResponse: updatedSettings.OpenAIAdvancedSchedulerEffectiveWeightPreviousResponse,
 		OpenAIAdvancedSchedulerEffectiveWeightSessionSticky:    updatedSettings.OpenAIAdvancedSchedulerEffectiveWeightSessionSticky,
+		BalanceForecastEnabled:                                 updatedSettings.BalanceForecastEnabled,
+		BalanceForecastThresholdHours:                          updatedSettings.BalanceForecastThresholdHours,
+		BalanceForecastMaxNotifications:                        updatedSettings.BalanceForecastMaxNotifications,
 		BalanceLowNotifyEnabled:                                updatedSettings.BalanceLowNotifyEnabled,
 		BalanceLowNotifyThreshold:                              updatedSettings.BalanceLowNotifyThreshold,
 		BalanceLowNotifyRechargeURL:                            updatedSettings.BalanceLowNotifyRechargeURL,
@@ -2883,6 +2900,7 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		UsageShowCacheRate:                    updatedSettings.UsageShowCacheRate,
 		UsageShowCacheRateToUsers:             updatedSettings.UsageShowCacheRateToUsers,
 		UsageShowUpstreamResponseModelToUsers: updatedSettings.UsageShowUpstreamResponseModelToUsers,
+		SmartOpsHiddenMenuItems:               updatedSettings.SmartOpsHiddenMenuItems,
 		RequestCaptureEnabled:                 updatedSettings.RequestCaptureEnabled,
 		RequestCaptureQuotaMiB:                updatedSettings.RequestCaptureQuotaMiB,
 		RequestCaptureRetentionDays:           updatedSettings.RequestCaptureRetentionDays,
