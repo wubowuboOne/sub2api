@@ -18,14 +18,7 @@
             :aria-label="t('admin.settings.title')"
           >
             <div class="settings-tabs">
-              <div
-                v-for="tab in settingsTabs"
-                :key="tab.key"
-                role="presentation"
-                class="settings-tab-wrapper relative flex min-w-0 flex-1 basis-0"
-                :class="tab.key === 'features' && 'settings-tab-wrapper-new-feature'"
-                :style="tab.key === 'features' ? { flex: '2.2 1 0%', minWidth: '11rem' } : undefined"
-              >
+              <template v-for="tab in settingsTabs" :key="tab.key">
                 <button
                   :id="`settings-tab-${tab.key}`"
                   type="button"
@@ -36,7 +29,6 @@
                     'settings-tab',
                     activeTab === tab.key && 'settings-tab-active',
                   ]"
-                  :style="['features', 'gateway', 'email'].includes(tab.key) ? { paddingRight: '7rem' } : undefined"
                   @click="selectSettingsTab(tab.key)"
                   @keydown="handleSettingsTabKeydown($event, tab.key)"
                 >
@@ -51,21 +43,27 @@
                   v-if="tab.key === 'features'"
                   :notice-id="NEW_FEATURE_NOTICES.protocolFeatureSwitches"
                   :user-id="authStore.user?.id"
-                  class="absolute right-2 top-1/2 z-10 -translate-y-1/2"
+                  class="settings-tab-badge"
                 />
                 <NewFeatureBadge
                   v-if="tab.key === 'email'"
                   :notice-id="NEW_FEATURE_NOTICES.balanceForecast"
                   :user-id="authStore.user?.id"
-                  class="absolute right-2 top-1/2 z-10 -translate-y-1/2"
+                  class="settings-tab-badge"
                 />
                 <NewFeatureBadge
                   v-if="tab.key === 'gateway'"
                   :notice-id="NEW_FEATURE_NOTICES.serverlessIPRouting"
                   :user-id="authStore.user?.id"
-                  class="absolute right-2 top-1/2 z-10 -translate-y-1/2"
+                  class="settings-tab-badge"
                 />
-              </div>
+                <NewFeatureBadge
+                  v-if="tab.key === 'payment'"
+                  :notice-id="NEW_FEATURE_NOTICES.bepusdtPayment"
+                  :user-id="authStore.user?.id"
+                  class="settings-tab-badge"
+                />
+              </template>
             </div>
           </nav>
         </div>
@@ -8914,20 +8912,30 @@
                     t("admin.settings.payment.enabledPaymentTypes")
                   }}</label>
                   <div class="mt-1.5 flex flex-wrap gap-2">
-                    <button
+                    <div
                       v-for="pt in allPaymentTypes"
                       :key="pt.value"
-                      type="button"
-                      @click="togglePaymentType(pt.value)"
-                      :class="[
-                        'rounded-lg border px-3 py-1.5 text-sm font-medium transition-all',
-                        isPaymentTypeEnabled(pt.value)
-                          ? 'border-primary-500 bg-primary-500 text-white shadow-sm'
-                          : 'border-gray-300 bg-white text-gray-600 hover:border-gray-400 hover:bg-gray-50 dark:border-dark-600 dark:bg-dark-800 dark:text-gray-300 dark:hover:border-dark-500',
-                      ]"
+                      class="inline-flex items-center gap-2"
                     >
-                      {{ pt.label }}
-                    </button>
+                      <button
+                        type="button"
+                        :data-testid="pt.value === 'bepusdt' ? 'bepusdt-payment-type' : undefined"
+                        @click="togglePaymentType(pt.value)"
+                        :class="[
+                          'rounded-lg border px-3 py-1.5 text-sm font-medium transition-all',
+                          isPaymentTypeEnabled(pt.value)
+                            ? 'border-primary-500 bg-primary-500 text-white shadow-sm'
+                            : 'border-gray-300 bg-white text-gray-600 hover:border-gray-400 hover:bg-gray-50 dark:border-dark-600 dark:bg-dark-800 dark:text-gray-300 dark:hover:border-dark-500',
+                        ]"
+                      >
+                        {{ pt.label }}
+                      </button>
+                      <NewFeatureBadge
+                        v-if="pt.value === 'bepusdt'"
+                        :notice-id="NEW_FEATURE_NOTICES.bepusdtPayment"
+                        :user-id="authStore.user?.id"
+                      />
+                    </div>
                   </div>
                   <p class="mt-2 text-xs text-gray-400 dark:text-gray-500">
                     {{ t("admin.settings.payment.enabledPaymentTypesHint") }}
@@ -8996,6 +9004,10 @@
           />
 
           <!-- Provider Management -->
+          <BEpusdtManager
+            v-if="form.payment_enabled && form.payment_enabled_types.includes('bepusdt')"
+            :user-id="authStore.user?.id"
+          />
           <PaymentProviderList
             v-if="form.payment_enabled"
             :providers="providers"
@@ -9004,6 +9016,7 @@
             :enabled-payment-types="form.payment_enabled_types"
             :all-payment-types="allPaymentTypes"
             :redirect-label="t('admin.settings.payment.easypayRedirect')"
+            :user-id="authStore.user?.id"
             @refresh="loadProviders"
             @create="openCreateProvider"
             @edit="openEditProvider"
@@ -9493,6 +9506,7 @@
         :enabled-key-options="enabledProviderKeyOptions"
         :all-payment-types="allPaymentTypes"
         :redirect-label="t('admin.settings.payment.easypayRedirect')"
+        :user-id="authStore.user?.id"
         @close="showProviderDialog = false"
         @save="handleSaveProvider"
       />
@@ -9580,6 +9594,7 @@ import {
 import ConfirmDialog from "@/components/common/ConfirmDialog.vue";
 import PaymentProviderList from "@/components/payment/PaymentProviderList.vue";
 import PaymentProviderDialog from "@/components/payment/PaymentProviderDialog.vue";
+import BEpusdtManager from "@/components/payment/BEpusdtManager.vue";
 import GroupBadge from "@/components/common/GroupBadge.vue";
 import GroupOptionItem from "@/components/common/GroupOptionItem.vue";
 import RequestTimezoneSettings from "@/components/settings/RequestTimezoneSettings.vue";
@@ -13314,6 +13329,7 @@ async function saveBetaPolicySettings() {
 // ==================== Provider Management ====================
 
 const allPaymentTypes = computed(() => [
+  { value: "bepusdt", label: t("admin.settings.payment.providerBEpusdt") },
   { value: "easypay", label: t("payment.methods.easypay") },
   { value: "alipay", label: t("payment.methods.alipay") },
   { value: "wxpay", label: t("payment.methods.wxpay") },
@@ -13371,6 +13387,7 @@ const providerDialogRef = ref<InstanceType<
 > | null>(null);
 
 const providerKeyOptions = computed(() => [
+  { value: "bepusdt", label: t("admin.settings.payment.providerBEpusdt") },
   { value: "easypay", label: t("admin.settings.payment.providerEasypay") },
   { value: "alipay", label: t("admin.settings.payment.providerAlipay") },
   { value: "wxpay", label: t("admin.settings.payment.providerWxpay") },
@@ -14108,11 +14125,7 @@ h2[id^="settings-section-"]:target {
   }
 
   .settings-tab {
-    @apply min-w-0 flex-1 basis-0 overflow-hidden px-2 text-[13px];
-  }
-
-  .settings-tab-icon {
-    @apply h-6 w-6;
+    @apply min-w-0 flex-1 basis-0 overflow-hidden px-1.5 text-[13px];
   }
 }
 
@@ -14154,7 +14167,7 @@ h2[id^="settings-section-"]:target {
 }
 
 .settings-tab-icon {
-  @apply flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-gray-500 transition-colors duration-200 dark:text-gray-400;
+  @apply flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-gray-500 transition-colors duration-200 dark:text-gray-400 md:h-6 md:w-6;
 }
 
 .settings-tab:hover .settings-tab-icon,
@@ -14168,6 +14181,12 @@ h2[id^="settings-section-"]:target {
 
 .settings-tab-label {
   @apply min-w-0 overflow-hidden text-ellipsis whitespace-nowrap leading-none;
+}
+
+/* The badge is a normal flex item: its width follows the locale's text, and
+   dismissing it hands the space back to the tabs. */
+.settings-tab-badge {
+  @apply -ml-0.5 mr-0.5;
 }
 </style>
 

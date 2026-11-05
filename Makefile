@@ -2,6 +2,7 @@
 
 FRONTEND_CRITICAL_VITEST := \
 	src/components/common/__tests__/NewFeatureBadge.spec.ts \
+	src/components/admin/group/__tests__/GroupAntiDistillationSettings.spec.ts \
 	src/views/admin/__tests__/ChannelsView.modelSync.spec.ts \
 	src/views/admin/__tests__/ChannelsView.webSearchEmulation.spec.ts \
 	src/views/admin/__tests__/channelPricingTransfer.spec.ts \
@@ -129,6 +130,7 @@ FRONTEND_CRITICAL_VITEST := \
 	src/components/settings/AccountPerformanceSettings.spec.ts \
 	src/components/account/__tests__/AccountPerformanceCell.spec.ts \
 	src/components/account/__tests__/AccountPerformanceDialog.spec.ts \
+	src/api/__tests__/admin.accounts.performance.spec.ts \
 	src/components/user/profile/__tests__/ProfileIdentityBindingsSection.spec.ts \
 	src/views/admin/__tests__/SettingsView.spec.ts \
 	src/views/admin/__tests__/HarvestFlowView.spec.ts \
