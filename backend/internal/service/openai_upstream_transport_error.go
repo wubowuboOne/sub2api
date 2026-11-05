@@ -51,7 +51,7 @@ var persistentUpstreamTransportErrorMarkers = []string{
 
 // classifyUpstreamTransportError decides whether a transport-level upstream error
 // is durable (Persistent — evict the account + alert) or a transient blip
-// (fail over to a healthy account but keep this one schedulable).
+// (honor configured pool retries or fail over, but keep this one schedulable).
 //
 // Motivating incident: a SOCKS5 proxy whose subscription lapsed returned
 // `username/password authentication failed`; the account was nonetheless
@@ -106,9 +106,9 @@ func isClientCanceledTransportError(ctx context.Context, err error) bool {
 //  2. for durable faults (expired/rejected proxy creds, dead proxy, DNS/routing)
 //     temporarily unschedules the account (DB + in-memory) and logs a stable
 //     warn event that alert rules can key on;
-//  3. returns an error that is *UpstreamFailoverError (so the handler fails over
-//     to a healthy account) for all non-canceled errors, or a plain error for
-//     context.Canceled (client gone — no failover, no eviction).
+//  3. returns *UpstreamFailoverError, allowing configured same-account retries
+//     for transient failures mapped to 502 before account failover. Terminal
+//     cancellation and already-submitted request guards retain their behavior.
 //
 // It deliberately does NOT write to the response: the handler owns the response
 // (failover, or a protocol-correct error once failover is exhausted).
@@ -167,13 +167,17 @@ func (s *OpenAIGatewayService) handleOpenAIUpstreamTransportError(ctx context.Co
 		return err
 	}
 
-	if classifyUpstreamTransportError(err).Persistent {
+	persistent := classifyUpstreamTransportError(err).Persistent
+	if persistent {
 		s.tempUnscheduleOpenAITransportError(ctx, account, safeErr)
 	}
 
+	// Use the mapped gateway status when no upstream HTTP response exists.
+	// Durable proxy/network faults keep their immediate eviction policy.
 	return &UpstreamFailoverError{
-		StatusCode:   http.StatusBadGateway,
-		ResponseBody: openAITransportFailoverBody,
+		StatusCode:             http.StatusBadGateway,
+		ResponseBody:           openAITransportFailoverBody,
+		RetryableOnSameAccount: !persistent && account.IsPoolMode() && account.IsPoolModeRetryableStatus(http.StatusBadGateway),
 	}
 }
 
