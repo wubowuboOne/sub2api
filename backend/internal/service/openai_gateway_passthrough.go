@@ -1839,7 +1839,8 @@ func openAIStreamErrorEventShouldFailover(payload []byte, message string) bool {
 	if isOpenAIUpstreamAccessStateError(message, payload) {
 		return true
 	}
-	switch openAIStreamFailedEventSemanticStatus(payload, message) {
+	semanticStatus := openAIStreamFailedEventSemanticStatus(payload, message)
+	switch semanticStatus {
 	case http.StatusForbidden:
 		return openAIStream403AccountFailure(payload, message)
 	case http.StatusUnauthorized, http.StatusTooManyRequests, 529:
@@ -1847,6 +1848,23 @@ func openAIStreamErrorEventShouldFailover(payload []byte, message string) bool {
 	}
 	if isOpenAITransientProcessingError(http.StatusBadRequest, message, payload) {
 		return true
+	}
+	// Relays can send transport failures as bare error events over HTTP 200.
+	// Preserve their retryable 502 classification without relaxing request/policy errors.
+	if semanticStatus == http.StatusBadGateway && openAIStreamFailedEventShouldFailover(payload, message) {
+		code := openAIStreamFailedEventErrorCode(payload)
+		if code == "" {
+			code = strings.ToLower(strings.TrimSpace(gjson.GetBytes(payload, "code").String()))
+		}
+		switch code {
+		case OpenAIUpstreamStreamReadErrorCode, OpenAIUpstreamHTTP2StreamErrorCode, OpenAIUpstreamStreamTruncatedCode:
+			return true
+		case "", "server_error", "upstream_error":
+			switch strings.ToLower(strings.TrimSpace(message)) {
+			case "upstream response stream was interrupted", "upstream http/2 stream failed", "upstream response stream ended before completion":
+				return true
+			}
+		}
 	}
 	combined := strings.ToLower(strings.TrimSpace(message + " " +
 		gjson.GetBytes(payload, "error.message").String() + " " +

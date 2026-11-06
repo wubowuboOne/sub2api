@@ -167,6 +167,45 @@ data: {"response":{"created_at":1793884529,"error":{"code":"bps_stream_error","m
 			body:              `{"error":{"message":"Request payload is too large","type":"invalid_request_error"}}`,
 		},
 	}
+	streamRetryBase := cases[0]
+	streamRetryBase.accountID = 59327
+	streamRetryBase.model = "gpt-6.1-sol"
+	streamRetryBase.upstreamRequestID = "stream-transport-retry"
+	streamRetryBase.body = "event: response.created\ndata: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_stream_retry\"}}\n\n"
+	for _, streamError := range []struct {
+		name     string
+		code     string
+		message  string
+		retries  int
+		fallback bool
+	}{
+		{"bare_stream_read_error", service.OpenAIUpstreamStreamReadErrorCode, "Upstream response stream was interrupted", 10, true},
+		{"bare_stream_http2_error", service.OpenAIUpstreamHTTP2StreamErrorCode, "Upstream HTTP/2 stream failed", 2, false},
+		{"bare_stream_truncated", service.OpenAIUpstreamStreamTruncatedCode, "Upstream response stream ended before completion", 2, false},
+		{"bare_stream_message_only", "", "Upstream response stream was interrupted", 2, false},
+	} {
+		tt := streamRetryBase
+		tt.name, tt.retryCount, tt.secondAccount = streamError.name, streamError.retries, streamError.fallback
+		tt.bufferedOutput = true
+		tt.body += "data: {\"type\":\"response.output_text.delta\",\"delta\":\"failed_attempt_only\"}\n\n"
+		tt.body += fmt.Sprintf("event: error\ndata: {\"type\":\"error\",\"code\":%q,\"message\":%q}\n\n", streamError.code, streamError.message)
+		cases = append(cases, tt)
+	}
+	for _, policy := range []struct {
+		name        string
+		retries     int
+		retryStatus int
+		disablePool bool
+	}{
+		{"bare_stream_retry_disabled", 0, 0, false},
+		{"bare_stream_502_not_configured", 10, http.StatusServiceUnavailable, false},
+		{"bare_stream_non_pool", 10, 0, true},
+	} {
+		tt := streamRetryBase
+		tt.name, tt.retryCount, tt.retryStatus, tt.disablePool = policy.name, policy.retries, policy.retryStatus, policy.disablePool
+		tt.body += "event: error\ndata: {\"type\":\"error\",\"code\":\"upstream_stream_read_error\",\"message\":\"Upstream response stream was interrupted\"}\n\n"
+		cases = append(cases, tt)
+	}
 	for _, prelude := range []struct {
 		name string
 		wire string
