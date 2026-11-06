@@ -119,6 +119,7 @@ func TestOpenAIResponsesConfiguredStatusRetriesSameAccount(t *testing.T) {
 		transportErr      error
 		retryStatus       int
 		disablePool       bool
+		bufferedOutput    bool
 	}{
 		{
 			name:              "bps_stream_error",
@@ -200,6 +201,27 @@ data: {"response":{"created_at":1793884529,"error":{"code":"bps_stream_error","m
 		opaque.body = strings.Replace(opaque.body, "event: response.failed", prelude+"event: response.failed", 1)
 		cases = append(cases, opaque)
 	}
+	for _, output := range []struct {
+		name string
+		wire string
+	}{
+		{name: "reasoning", wire: "data: {\"type\":\"response.reasoning_summary_text.delta\",\"output_index\":0,\"delta\":\"failed_attempt_only\"}\n\n"},
+		{name: "tool", wire: "data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"type\":\"function_call\",\"id\":\"fc_failed\",\"call_id\":\"call_failed\",\"name\":\"lookup\",\"arguments\":\"{}\"}}\n\n"},
+		{name: "text", wire: "data: {\"type\":\"response.output_text.delta\",\"output_index\":0,\"delta\":\"failed_attempt_only\"}\n\n"},
+	} {
+		buffered := cases[0]
+		buffered.name, buffered.accountID = "bps_buffered_"+output.name, 59328
+		buffered.retryCount, buffered.secondAccount = 2, true
+		buffered.bufferedOutput = true
+		if output.name == "reasoning" {
+			buffered.retryCount = 10
+			buffered.upstreamRequestID = "be4eb311-26d8-4978-8043-b489a3b40373"
+			buffered.body = strings.ReplaceAll(buffered.body, "1793885885", "1793929206")
+			buffered.body = strings.ReplaceAll(buffered.body, "resp_retry", "resp_05d38be0b6d79b5f016aed2fedae0c87d0a16137f4a49ef5f5")
+		}
+		buffered.body = strings.Replace(buffered.body, "event: response.failed", output.wire+"event: response.failed", 1)
+		cases = append(cases, buffered)
+	}
 	for _, transport := range []struct {
 		name        string
 		err         error
@@ -250,6 +272,10 @@ data: {"response":{"created_at":1793884529,"error":{"code":"bps_stream_error","m
 						fallback.Credentials = map[string]any{
 							"api_key": "sk-fallback", "base_url": "https://api.example.test",
 							"pool_mode": true, "pool_mode_retry_count": float64(0),
+						}
+						if tt.bufferedOutput {
+							fallback.Credentials["pool_mode_retry_count"] = float64(1)
+							fallback.Credentials["pool_mode_retry_status_codes"] = []any{float64(http.StatusBadGateway)}
 						}
 						accountRepo.accounts = append(accountRepo.accounts, fallback)
 					}
@@ -318,6 +344,8 @@ data: {"response":{"created_at":1793884529,"error":{"code":"bps_stream_error","m
 					}
 
 					h.Responses(c)
+					require.NotContains(t, rec.Body.String(), "failed_attempt_only")
+					require.NotContains(t, rec.Body.String(), "call_failed")
 
 					upstream.mu.Lock()
 					calls := append([]int64(nil), upstream.accountIDs...)
@@ -338,6 +366,9 @@ data: {"response":{"created_at":1793884529,"error":{"code":"bps_stream_error","m
 					}
 					if tt.secondAccount {
 						wantCalls = append(wantCalls, tt.accountID+100000)
+						if tt.bufferedOutput {
+							wantCalls = append(wantCalls, tt.accountID+100000)
+						}
 					}
 					require.Equal(t, wantCalls, calls, "configured retries must reuse the same account and then stop")
 					if tt.bodyLimitFirst {
@@ -381,7 +412,9 @@ func TestOpenAIMessagesConfiguredStatusRetriesSameAccount(t *testing.T) {
 		{name: "queue_heartbeat", retries: 2, retryStatus: http.StatusBadGateway, wantCalls: 3, queueHeartbeat: true},
 		{name: "stream_heartbeat", retries: 2, retryStatus: http.StatusBadGateway, wantCalls: 3, streamHeartbeat: true},
 		{name: "502_not_configured", retries: 10, retryStatus: http.StatusServiceUnavailable, wantCalls: 1},
-		{name: "real_output", retries: 10, retryStatus: http.StatusBadGateway, wantCalls: 1, realOutput: true},
+		{name: "buffered_real_output", retries: 2, retryStatus: http.StatusBadGateway, wantCalls: 3, realOutput: true},
+		{name: "real_output_retry_disabled", retries: 0, retryStatus: http.StatusBadGateway, wantCalls: 1, realOutput: true},
+		{name: "reasoning_tool_recovers_after_two", retries: 10, retryStatus: http.StatusBadGateway, wantCalls: 3, successAfter: 2, partialPrelude: true},
 		{name: "recovers_after_two", retries: 10, retryStatus: http.StatusBadGateway, wantCalls: 3, successAfter: 2},
 		{name: "opaque_preamble_recovers_after_two", retries: 10, retryStatus: http.StatusBadGateway, wantCalls: 3, successAfter: 2, opaquePrelude: true},
 	} {
@@ -390,12 +423,14 @@ func TestOpenAIMessagesConfiguredStatusRetriesSameAccount(t *testing.T) {
 }
 
 type messagesRetryCase struct {
+	chat                                        bool
 	transportErr                                error
 	successAfter                                int
 	name                                        string
 	retries, retryStatus, wantCalls             int
 	queueHeartbeat, streamHeartbeat, realOutput bool
 	opaquePrelude                               bool
+	partialPrelude                              bool
 }
 
 type messagesRetryUsageRecorder struct {
@@ -415,7 +450,7 @@ type messagesRetryHeartbeatWriter struct {
 
 func (w *messagesRetryHeartbeatWriter) Write(p []byte) (int, error) {
 	n, err := w.ResponseWriter.Write(p)
-	if err == nil && bytes.Contains(p, []byte("event: ping")) {
+	if err == nil && (bytes.Contains(p, []byte("event: ping")) || bytes.Equal(p, []byte(":\n\n"))) {
 		select {
 		case w.beat <- struct{}{}:
 		default:
@@ -472,6 +507,11 @@ data: {"response":{"created_at":1793894912,"error":{"code":"bps_stream_error","m
 			upstream.body = strings.Replace(upstream.body, "event: response.failed", prelude+"event: response.failed", 1)
 		}
 	}
+	if test.partialPrelude {
+		prelude := "data: {\"type\":\"response.reasoning_summary_text.delta\",\"output_index\":0,\"delta\":\"failed_attempt_only\"}\n\n" +
+			"data: {\"type\":\"response.output_item.added\",\"output_index\":1,\"item\":{\"type\":\"function_call\",\"id\":\"fc_failed\",\"call_id\":\"call_failed\",\"name\":\"lookup\",\"arguments\":\"{}\"}}\n\n"
+		upstream.body = strings.Replace(upstream.body, "event: response.failed", prelude+"event: response.failed", 1)
+	}
 	if test.realOutput {
 		upstream.body = strings.Replace(upstream.body, "event: response.failed", "data: "+`{"type":"response.output_text.delta","delta":"partial"}`+"\n\nevent: response.failed", 1)
 	}
@@ -527,6 +567,9 @@ data: {"type":"response.completed","response":{"id":"resp_messages_success","sta
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(`{"model":"gpt-6-sol","max_tokens":32,"messages":[{"role":"user","content":"hello"}],"stream":true}`))
+	if test.chat {
+		c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"gpt-6-sol","messages":[{"role":"user","content":"hello"}],"stream":true}`))
+	}
 	c.Request.Header.Set("Content-Type", "application/json")
 	c.Request = c.Request.WithContext(ctx)
 	if test.streamHeartbeat {
@@ -545,7 +588,13 @@ data: {"type":"response.completed","response":{"id":"resp_messages_success","sta
 		recordGatewayStreamHeartbeat(c, written)
 		c.Writer.Flush()
 	}
-	h.Messages(c)
+	if test.chat {
+		h.ChatCompletions(c)
+	} else {
+		h.Messages(c)
+	}
+	require.NotContains(t, rec.Body.String(), "failed_attempt_only")
+	require.NotContains(t, rec.Body.String(), "call_failed")
 	upstream.mu.Lock()
 	calls := append([]int64(nil), upstream.accountIDs...)
 	upstream.mu.Unlock()
@@ -563,19 +612,28 @@ data: {"type":"response.completed","response":{"id":"resp_messages_success","sta
 		wantEvents = test.successAfter
 		require.Equal(t, http.StatusOK, rec.Code)
 		require.Contains(t, rec.Body.String(), "recovered answer")
-		require.Equal(t, 1, strings.Count(rec.Body.String(), "event: message_start"))
-		require.Equal(t, 1, strings.Count(rec.Body.String(), "event: message_stop"))
+		if test.chat {
+			require.Equal(t, 1, strings.Count(rec.Body.String(), "data: [DONE]"))
+		} else {
+			require.Equal(t, 1, strings.Count(rec.Body.String(), "event: message_start"))
+			require.Equal(t, 1, strings.Count(rec.Body.String(), "event: message_stop"))
+		}
 		require.NotContains(t, rec.Body.String(), "resp_bps_messages")
 		require.NotContains(t, rec.Body.String(), "event: error")
-	} else if test.realOutput {
+	} else if test.realOutput && test.retries == 0 {
 		wantKind = "http_error"
 		require.Contains(t, rec.Body.String(), "partial")
 	} else {
 		require.NotContains(t, rec.Body.String(), "event: message_start")
 	}
 	if test.streamHeartbeat {
-		require.Contains(t, rec.Body.String(), "event: ping")
-		require.Contains(t, rec.Body.String(), "event: error")
+		if test.chat {
+			require.Contains(t, rec.Body.String(), ":\n\n")
+			require.Contains(t, rec.Body.String(), "error")
+		} else {
+			require.Contains(t, rec.Body.String(), "event: ping")
+			require.Contains(t, rec.Body.String(), "event: error")
+		}
 	}
 	value, ok := c.Get(service.OpsUpstreamErrorsKey)
 	require.True(t, ok)
@@ -591,10 +649,19 @@ data: {"type":"response.completed","response":{"id":"resp_messages_success","sta
 		require.Len(t, usageRepo.rows, 1, "retry attempts must not create separate usage records")
 		require.Equal(t, 1, usageRepo.rows[0].InputTokens)
 		require.Equal(t, 1, usageRepo.rows[0].OutputTokens)
-	} else if test.realOutput {
+	} else if test.realOutput && test.retries == 0 {
 		require.Len(t, usageRepo.rows, 1, "a terminal failure may retain one partial usage record")
 		require.Zero(t, usageRepo.rows[0].ActualCost)
 	} else {
 		require.Empty(t, usageRepo.rows, "pre-output retries and exhausted failover must not bill attempts")
+	}
+}
+
+func TestOpenAIChatConfiguredStatusRetriesSameAccount(t *testing.T) {
+	for _, test := range []messagesRetryCase{
+		{name: "buffered_heartbeat", chat: true, retries: 2, retryStatus: http.StatusBadGateway, wantCalls: 3, streamHeartbeat: true, partialPrelude: true},
+		{name: "reasoning_tool_recovers_after_two", chat: true, retries: 10, retryStatus: http.StatusBadGateway, wantCalls: 3, successAfter: 2, partialPrelude: true},
+	} {
+		t.Run(test.name, func(t *testing.T) { runMessagesRetryCase(t, test) })
 	}
 }

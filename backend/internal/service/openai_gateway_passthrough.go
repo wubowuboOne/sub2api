@@ -2192,6 +2192,16 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthroughWithImage(
 	// pendingLines 在首个可见输出前保留前导事件，确保无输出失败仍可安全 failover。
 	pendingLines := make([]string, 0, 8)
 	var pendingLineBytes int64
+	bufferRetryAttempt := openAIStreamBuffersConfiguredRetry(account)
+	var retryStage *openAIFirstOutputStage
+	if bufferRetryAttempt {
+		retryStage = newDefaultOpenAIFirstOutputStage()
+		defer func() {
+			if err := retryStage.Close(); err != nil {
+				logger.LegacyPrintf("service.openai_gateway", "OpenAI passthrough retry staging cleanup failed: account=%d error=%v", account.ID, err)
+			}
+		}()
+	}
 
 	// ── 首个可见输出之前的下游 keepalive ──────────────────────────────────
 	//
@@ -2254,6 +2264,14 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthroughWithImage(
 	}
 	defer flushPendingOutput()
 	writePendingLines := func() bool {
+		if retryStage != nil && !retryStage.closed {
+			if err := retryStage.CommitTo(w); err != nil {
+				clientDisconnected = true
+				return false
+			}
+			pendingLineBytes = 0
+			return true
+		}
 		for _, pending := range pendingLines {
 			if _, err := fmt.Fprintln(w, pending); err != nil {
 				clientDisconnected = true
@@ -2265,6 +2283,19 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthroughWithImage(
 		pendingLineBytes = 0
 		return true
 	}
+	discardRetryOutput := func(eventType string) {
+		if retryStage == nil || retryStage.closed {
+			return
+		}
+		if err := retryStage.Close(); err != nil {
+			logger.LegacyPrintf("service.openai_gateway", "OpenAI passthrough failed retry staging cleanup failed: account=%d error=%v", account.ID, err)
+		}
+		retryStage = newDefaultOpenAIFirstOutputStage()
+		if eventType != "" {
+			_, _ = retryStage.WriteString("event: " + eventType + "\n")
+		}
+		pendingLineBytes = retryStage.Buffered()
+	}
 	ensureResponseFailedTerminal := func() {
 		if !sawBareError || sawResponseFailed || failureDelivered {
 			return
@@ -2273,6 +2304,7 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthroughWithImage(
 			s.handleOpenAIStreamTerminalAccountSideEffects(c, account, bareErrorPayload, failedMessage, resp.Header, mappedModel)
 			bareErrorAccountSideEffectsPending = false
 		}
+		discardRetryOutput("")
 		if clientDisconnected || !writePendingLines() {
 			return
 		}
@@ -2478,6 +2510,7 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthroughWithImage(
 						}
 					}
 				}
+				discardRetryOutput(eventType)
 				forceFlushFailedEvent = true
 				sawFailedEvent = true
 			}
@@ -2567,12 +2600,19 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthroughWithImage(
 		}
 
 		if !clientDisconnected && !failureDelivered && !suppressCurrentEvent {
-			if !clientOutputStarted && !lineStartsClientOutput {
+			holdAttempt := bufferRetryAttempt && !sawTerminalEvent
+			if !clientOutputStarted && (!lineStartsClientOutput || holdAttempt) {
 				lineBytes := int64(len(line)) + 1
 				if lineBytes > openAIFirstOutputStageMaxBytes-pendingLineBytes {
 					return resultWithUsage(), s.newOpenAIStreamFailoverError(c, account, true, upstreamRequestID, nil, "OpenAI passthrough pre-output staging limit exceeded")
 				}
-				pendingLines = append(pendingLines, line)
+				if retryStage != nil {
+					if _, err := retryStage.WriteString(line + "\n"); err != nil {
+						return resultWithUsage(), s.newOpenAIStreamFailoverError(c, account, true, upstreamRequestID, nil, "OpenAI passthrough retry staging failed")
+					}
+				} else {
+					pendingLines = append(pendingLines, line)
+				}
 				pendingLineBytes += lineBytes
 				continue
 			}
@@ -2581,7 +2621,7 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthroughWithImage(
 			if !clientOutputStarted {
 				stopKeepalive()
 			}
-			if !clientOutputStarted && len(pendingLines) > 0 {
+			if !clientOutputStarted && pendingLineBytes > 0 {
 				if !writePendingLines() {
 					continue
 				}

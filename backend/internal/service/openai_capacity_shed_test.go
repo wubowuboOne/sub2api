@@ -158,7 +158,7 @@ data: ` + payload + `
 					require.Error(t, err)
 					var failoverErr *UpstreamFailoverError
 					wantKind := "failover"
-					if outputStarted {
+					if outputStarted && retryStatus != http.StatusBadGateway {
 						require.NotErrorAs(t, err, &failoverErr, "committed model output cannot be replayed")
 						require.Contains(t, rec.Body.String(), "partial")
 						wantKind = "stream_failed"
@@ -177,14 +177,7 @@ data: ` + payload + `
 					require.Equal(t, wantKind, upstream[0].Kind)
 					require.Equal(t, http.StatusBadGateway, upstream[0].UpstreamStatusCode)
 					require.Equal(t, account.ID, upstream[0].AccountID)
-					wantSuppressed := outputStarted && retryStatus == http.StatusBadGateway
-					require.Equal(t, wantSuppressed, logSink.ContainsMessage("openai.same_account_retry_suppressed"))
-					if wantSuppressed {
-						require.True(t, logSink.ContainsFieldValue("reason", "client_output_started"))
-						require.True(t, logSink.ContainsFieldValue("first_output_event", "response.output_text.delta"))
-						require.True(t, logSink.ContainsFieldValue("upstream_status", "502"))
-						require.True(t, logSink.ContainsField("adjusted_written_size"))
-					}
+					require.False(t, logSink.ContainsMessage("openai.same_account_retry_suppressed"), "configured 502 attempts stay private until their terminal event")
 				})
 			}
 		}

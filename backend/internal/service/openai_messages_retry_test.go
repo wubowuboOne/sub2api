@@ -55,7 +55,7 @@ func TestOpenAIMessagesBPSFailureAfterPreambleRetries(t *testing.T) {
 	}
 }
 
-func TestOpenAIMessagesBPSFailurePreservesOutputBoundary(t *testing.T) {
+func TestOpenAIMessagesBPSFailurePreservesOutputBoundaryWhenRetriesDisabled(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	for _, content := range []string{
 		`{"type":"response.output_text.delta","output_index":0,"delta":"partial"}`,
@@ -72,7 +72,7 @@ func TestOpenAIMessagesBPSFailurePreservesOutputBoundary(t *testing.T) {
 			body := "data: " + `{"type":"response.created","response":{"id":"resp_output"}}` + "\n\ndata: " + content + "\n\ndata: " + messagesBPSFailure + "\n\n"
 			resp := &http.Response{StatusCode: http.StatusOK, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(body))}
 			account := &Account{ID: 59328, Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Credentials: map[string]any{
-				"pool_mode": true, "pool_mode_retry_status_codes": []any{float64(http.StatusBadGateway)},
+				"pool_mode": true, "pool_mode_retry_count": float64(0), "pool_mode_retry_status_codes": []any{float64(http.StatusBadGateway)},
 			}}
 			_, err := svc.handleAnthropicStreamingResponse(resp, c, account, "model", "model", "model", time.Now())
 			var failoverErr *UpstreamFailoverError
@@ -81,8 +81,7 @@ func TestOpenAIMessagesBPSFailurePreservesOutputBoundary(t *testing.T) {
 			require.Equal(t, 1, strings.Count(rec.Body.String(), "event: message_start"))
 			require.Equal(t, 1, strings.Count(rec.Body.String(), "event: error"))
 			require.NotContains(t, rec.Body.String(), "event: message_stop")
-			require.True(t, logSink.ContainsMessage("openai.same_account_retry_suppressed"))
-			require.True(t, logSink.ContainsField("first_output_event"))
+			require.False(t, logSink.ContainsMessage("openai.same_account_retry_suppressed"), "disabled retries do not report an eligible retry being suppressed")
 		})
 	}
 }

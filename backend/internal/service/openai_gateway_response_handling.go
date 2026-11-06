@@ -62,6 +62,7 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 	}
 	guardFirstOutput := firstOutputTimeout > 0
 	stageFirstOutput := account != nil && account.Platform == PlatformOpenAI
+	bufferRetryAttempt := openAIStreamBuffersConfiguredRetry(account)
 	var attemptResponseHeaders http.Header
 	if stageFirstOutput {
 		if s.responseHeaderFilter != nil {
@@ -312,9 +313,12 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 			observeOpenAIHTTPProgress(ctx)
 		}
 		shouldFlush := eventShouldFlush || (queueDrained && clientOutputStarted)
+		if bufferRetryAttempt && !sawTerminalEvent {
+			shouldFlush = false
+		}
 		eventInProgress = false
 		if !clientDisconnected {
-			if eventStartsClientOutput {
+			if eventStartsClientOutput && (!bufferRetryAttempt || sawTerminalEvent) {
 				applyAttemptResponseHeaders()
 			}
 			if shouldFlush {
@@ -347,6 +351,9 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 			return
 		}
 		errorEventSent = true
+		if bufferRetryAttempt && firstOutputStage != nil && !firstOutputStage.closed {
+			_ = firstOutputStage.Close()
+		}
 		// Responses error events use top-level code/message/param fields. A nested
 		// Chat Completions error envelope loses the classification in strict clients.
 		payload := `{"type":"error","sequence_number":0,"code":` + strconv.Quote(code) + `,"message":` + strconv.Quote(message) + `,"param":null}`
@@ -396,6 +403,9 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 		}
 	}
 	flushPending := func(disconnectMessage string) {
+		if bufferRetryAttempt && (!terminalSuccessful || sawFailedEvent) {
+			return
+		}
 		if clientDisconnected || pendingBytes() == 0 {
 			return
 		}
@@ -688,6 +698,13 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 							return
 						}
 					}
+				}
+				if bufferRetryAttempt && firstOutputStage != nil && !firstOutputStage.closed {
+					if err := firstOutputStage.Close(); err != nil {
+						logger.LegacyPrintf("service.openai_gateway", "OpenAI failed retry staging cleanup failed: account=%d error=%v", account.ID, err)
+					}
+					firstOutputStage = newDefaultOpenAIFirstOutputStage()
+					_, _ = firstOutputStage.WriteString("event: " + eventType + "\n")
 				}
 				forceFlushFailedEvent = true
 				sawFailedEvent = true
@@ -1078,7 +1095,7 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 			if clientDisconnected || failureDelivered {
 				continue
 			}
-			if eventInProgress {
+			if eventInProgress && !bufferRetryAttempt {
 				continue
 			}
 			if time.Since(lastDownstreamWriteAt) < keepaliveInterval {

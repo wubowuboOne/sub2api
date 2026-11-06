@@ -73,6 +73,9 @@ func TestOpenAIOpaquePreambleCommitsOnSuccessAndPreservesOutputBoundary(t *testi
 					account := &Account{ID: 59327, Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Credentials: map[string]any{
 						"pool_mode": true, "pool_mode_retry_status_codes": []any{float64(http.StatusBadGateway)},
 					}}
+					if !completed {
+						account.Credentials["pool_mode_retry_count"] = float64(0)
+					}
 					err := runOpenAIOpaquePreambleStream(svc, c, resp, account, path)
 					if completed {
 						require.NoError(t, err)
@@ -88,8 +91,7 @@ func TestOpenAIOpaquePreambleCommitsOnSuccessAndPreservesOutputBoundary(t *testi
 						require.Error(t, err)
 						require.NotErrorAs(t, err, &failoverErr)
 						require.Contains(t, rec.Body.String(), "answer already delivered")
-						require.True(t, logSink.ContainsMessage("openai.same_account_retry_suppressed"))
-						require.True(t, logSink.ContainsField("first_output_item_type"))
+						require.False(t, logSink.ContainsMessage("openai.same_account_retry_suppressed"))
 					}
 				})
 			}

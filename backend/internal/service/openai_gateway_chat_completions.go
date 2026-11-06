@@ -917,6 +917,26 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 	refusalDetector := newOpenAIChatSilentRefusalDetector(requestBodyLen)
 	var streamFailoverErr *UpstreamFailoverError
 	var streamNonFailoverErr error
+	var retryStage *openAIFirstOutputStage
+	if openAIStreamBuffersConfiguredRetry(account) {
+		retryStage = newDefaultOpenAIFirstOutputStage()
+		defer func() {
+			if err := retryStage.Close(); err != nil {
+				logger.L().Warn("openai chat_completions stream: retry staging cleanup failed", zap.Error(err))
+			}
+		}()
+	}
+	commitRetryStage := func() bool {
+		if retryStage == nil || retryStage.closed {
+			return true
+		}
+		writeStreamHeaders()
+		if err := retryStage.CommitTo(c.Writer); err != nil {
+			clientDisconnected = true
+			return false
+		}
+		return true
+	}
 	terminalEventType := ""
 	// Grok chat bridge reuses Responses SSE; count native search tools for surcharge.
 	searchCount := 0
@@ -1034,7 +1054,7 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 			if strings.TrimSpace(event.Type) == "error" {
 				shouldFailover = openAIStreamErrorEventShouldFailover(payloadBytes, message)
 			}
-			if !clientOutputStarted && shouldFailover {
+			if !clientDisconnected && !clientOutputStarted && shouldFailover {
 				streamFailoverErr = s.newOpenAIStreamFailoverErrorWithModel(c, account, false, requestID, payloadBytes, message, upstreamModel, resp.Header)
 				return true
 			}
@@ -1083,6 +1103,9 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 			return true
 		}
 
+		if retryStage != nil && openAIStreamDataStartsClientOutput(payload, strings.TrimSpace(event.Type)) && !isTerminalEvent {
+			observeOpenAIHTTPProgress(c.Request.Context())
+		}
 		chunks := apicompat.ResponsesEventToChatChunks(&event, state)
 		if firstTokenMs == nil {
 			for _, chunk := range chunks {
@@ -1104,6 +1127,14 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 					)
 					continue
 				}
+				if retryStage != nil && !isTerminalEvent {
+					if _, err := retryStage.WriteString(sse); err != nil {
+						streamFailoverErr = s.newOpenAIStreamFailoverError(c, account, false, requestID, nil, "OpenAI chat retry staging failed")
+						_ = resp.Body.Close()
+						return true
+					}
+					continue
+				}
 				// A role-only chunk is protocol metadata, regardless of request size.
 				// Keep it private until useful output or a successful terminal so a
 				// subsequent capacity rejection can still enter bounded failover.
@@ -1112,6 +1143,9 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 					continue
 				}
 				if !clientOutputStarted {
+					if !commitRetryStage() {
+						break
+					}
 					writeStreamHeaders()
 					for _, pending := range pendingSSE {
 						if _, err := fmt.Fprint(c.Writer, pending); err != nil {
@@ -1165,6 +1199,9 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 					continue
 				}
 				if !clientOutputStarted {
+					if !commitRetryStage() {
+						break
+					}
 					writeStreamHeaders()
 					for _, pending := range pendingSSE {
 						if _, err := fmt.Fprint(c.Writer, pending); err != nil {
@@ -1193,6 +1230,9 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 		if !clientDisconnected && !clientOutputStarted {
 			if refusalDetector.IsSilentRefusal() {
 				return nil, newOpenAISilentRefusalFailoverError(c, account, requestID)
+			}
+			if !commitRetryStage() {
+				return resultWithUsage(), nil
 			}
 			if len(pendingSSE) > 0 {
 				writeStreamHeaders()
@@ -1382,15 +1422,17 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 			if clientDisconnected {
 				continue
 			}
-			if !clientOutputStarted {
+			if !clientOutputStarted && retryStage == nil {
 				continue
 			}
-			if time.Since(lastDataAt) < keepaliveInterval {
+			if retryStage == nil && time.Since(lastDataAt) < keepaliveInterval {
 				continue
 			}
 			// Send SSE comment as keepalive
 			writeStreamHeaders()
-			if _, err := fmt.Fprint(c.Writer, ":\n\n"); err != nil {
+			written, err := fmt.Fprint(c.Writer, ":\n\n")
+			recordOpenAIStreamKeepaliveBytes(c, written)
+			if err != nil {
 				logger.L().Info("openai chat_completions stream: client disconnected during keepalive",
 					zap.String("request_id", requestID),
 				)

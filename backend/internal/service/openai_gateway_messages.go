@@ -1058,6 +1058,7 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 	clientOutputStarted := false
 	firstClientOutputEvent := ""
 	firstClientOutputItemType := ""
+	bufferRetryAttempt := openAIStreamBuffersConfiguredRetry(account)
 	preamble := newDefaultOpenAIFirstOutputStage()
 	defer func() {
 		if err := preamble.Close(); err != nil {
@@ -1152,6 +1153,9 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 		s.parseSSEUsageBytesWithType([]byte(payload), event.Type, &usage)
 
 		eventType := strings.TrimSpace(event.Type)
+		if bufferRetryAttempt && openAIStreamDataStartsClientOutput(payload, eventType) && !openAIStreamEventTypeIsTerminal(eventType) {
+			observeOpenAIHTTPProgress(c.Request.Context())
+		}
 		isBareErrorEvent := eventType == "error"
 		isTerminalEvent := isOpenAICompatResponsesTerminalEvent(eventType) || isBareErrorEvent
 		if isTerminalEvent {
@@ -1239,7 +1243,8 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 
 		// Convert to Anthropic events
 		events := apicompat.ResponsesEventToAnthropicEvents(&event, state)
-		stagePreamble := !clientOutputStarted && !isTerminalEvent && !openAIStreamDataStartsClientOutput(payload, eventType)
+		stagePreamble := !clientOutputStarted && !isTerminalEvent &&
+			(bufferRetryAttempt || !openAIStreamDataStartsClientOutput(payload, eventType))
 		if !clientDisconnected {
 			for _, evt := range events {
 				sse, err := apicompat.ResponsesAnthropicEventToSSE(evt)
@@ -1476,7 +1481,7 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 			if clientDisconnected {
 				continue
 			}
-			if time.Since(lastDataAt) < keepaliveInterval {
+			if !bufferRetryAttempt && time.Since(lastDataAt) < keepaliveInterval {
 				continue
 			}
 			// Send Anthropic-format ping event
