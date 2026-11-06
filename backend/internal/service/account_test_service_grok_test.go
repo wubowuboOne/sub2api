@@ -146,6 +146,97 @@ func TestAccountTestService_TestAccountConnection_GrokUsesXAIResponses(t *testin
 	require.Contains(t, rec.Body.String(), `"type":"test_complete"`)
 }
 
+func TestAccountTestService_GrokTextUsesRequestedPrompt(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	const challenge = "Calculate and respond with ONLY the number, nothing else.\n\nQ: 9 - 3 = ?\nA:"
+	for _, mode := range []string{AccountTestModeDefault, AccountTestModeGrokText} {
+		for _, tc := range []struct {
+			name   string
+			prompt string
+			want   string
+		}{
+			{name: "challenge", prompt: challenge, want: challenge},
+			{name: "empty", want: grokQuotaProbeInput},
+			{name: "blank", prompt: " \n\t ", want: grokQuotaProbeInput},
+		} {
+			t.Run(mode+"/"+tc.name, func(t *testing.T) {
+				account := &Account{
+					ID: 13, Platform: PlatformGrok, Type: AccountTypeOAuth,
+					Status: StatusActive, Schedulable: true, Concurrency: 1,
+					Credentials: map[string]any{
+						"access_token":  "grok-access-token",
+						"refresh_token": "grok-refresh-token",
+						"expires_at":    time.Now().Add(2 * time.Hour).UTC().Format(time.RFC3339),
+						"model_mapping": map[string]any{
+							"grok": "grok-4.7",
+						},
+					},
+				}
+				repo := &mockAccountRepoForGemini{accountsByID: map[int64]*Account{account.ID: account}}
+				upstream := &httpUpstreamRecorder{resp: &http.Response{
+					StatusCode: http.StatusOK,
+					Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+					Body: io.NopCloser(strings.NewReader(
+						"data: {\"type\":\"response.output_text.delta\",\"delta\":\"6\"}\n\n" +
+							"data: {\"type\":\"response.completed\"}\n\n",
+					)),
+				}}
+				svc := &AccountTestService{
+					accountRepo: repo, grokTokenProvider: NewGrokTokenProvider(repo, nil), httpUpstream: upstream,
+				}
+				c, _ := gin.CreateTestContext(httptest.NewRecorder())
+				c.Request = httptest.NewRequest(http.MethodPost, "/api/v1/admin/accounts/13/test", nil)
+
+				require.NoError(t, svc.TestAccountConnection(c, account.ID, "grok", tc.prompt, mode))
+				require.Equal(t, tc.want, gjson.GetBytes(upstream.lastBody, "input").String())
+				require.Equal(t, "grok-4.7", gjson.GetBytes(upstream.lastBody, "model").String())
+				require.True(t, gjson.GetBytes(upstream.lastBody, "stream").Bool())
+				require.Equal(t, "https://cli-chat-proxy.grok.com/v1/responses", upstream.lastReq.URL.String())
+				require.Equal(t, "Bearer grok-access-token", upstream.lastReq.Header.Get("Authorization"))
+			})
+		}
+	}
+}
+
+func TestAccountTestService_GrokIdleProbeSendsChallenge(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	challenge := generateChallenge()
+	account := &Account{
+		ID: 13, Platform: PlatformGrok, Type: AccountTypeOAuth,
+		Status: StatusActive, Schedulable: true, Concurrency: 1,
+		Credentials: map[string]any{
+			"access_token":  "grok-access-token",
+			"refresh_token": "grok-refresh-token",
+			"expires_at":    time.Now().Add(2 * time.Hour).UTC().Format(time.RFC3339),
+		},
+	}
+	repo := &mockAccountRepoForGemini{accountsByID: map[int64]*Account{account.ID: account}}
+	upstream := &httpUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+		Body: io.NopCloser(strings.NewReader(
+			"data: {\"type\":\"response.output_text.delta\",\"delta\":\"" + challenge.Expected + "\"}\n\n" +
+				"data: {\"type\":\"response.completed\"}\n\n",
+		)),
+	}}
+	svc := &AccountTestService{
+		accountRepo: repo, grokTokenProvider: NewGrokTokenProvider(repo, nil), httpUpstream: upstream,
+	}
+	sample, err := svc.RunPelicanBackground(context.Background(), account.ID, "grok-4.7", &PelicanTestConfig{
+		QuestionKind: ChannelMonitorV3ProbeQuestionKind, Prompt: challenge.Prompt,
+		ModelID: "grok-4.7", ReasoningEffort: "high", ParallelCount: 1,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, sample)
+	require.Equal(t, challenge.Prompt, gjson.GetBytes(upstream.lastBody, "input").String())
+	require.Equal(t, "success", sample.Status, sample.ErrorMessage)
+	require.Equal(t, challenge.Expected, sample.ResponseText)
+	outcome, message := channelMonitorV3ProbeVerdict(nil, &PelicanGroupTestResult{
+		Status: sample.Status, ResponseText: sample.ResponseText, ErrorMessage: sample.ErrorMessage,
+	}, challenge.Expected)
+	require.Equal(t, ChannelMonitorV3ProbeSuccess, outcome, message)
+}
+
 func TestAccountTestService_TestAccountConnection_GrokDefaultsEmptyModelTo45(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
