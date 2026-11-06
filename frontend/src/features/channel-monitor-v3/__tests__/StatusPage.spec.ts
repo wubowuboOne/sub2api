@@ -221,21 +221,24 @@ describe('V3 status page', () => {
     expect(cells.map((item) => item.attributes('data-status'))).toEqual(['operational', 'degraded', 'down'])
 
     await cells[0].trigger('mouseenter')
-    expect(tooltip()!.querySelector('[data-testid="monitor-v3-tooltip-probe"]')!.textContent).toContain('channelMonitorV3.tooltip.probe')
+    expect(tooltip()!.querySelector('[data-testid="monitor-v3-tooltip-probe"]')).toBeNull()
     expect(tooltip()!.textContent).toContain('channelMonitorV3.tooltip.probeLatency')
     expect(tooltip()!.textContent).toContain('channelMonitorV3.tooltip.seconds:{"value":"1.8"}')
-    expect(tooltip()!.textContent).toContain('channelMonitorV3.tooltip.probeNote')
+    expect(tooltip()!.querySelector('[data-testid="monitor-v3-tooltip-note"]')).toBeNull()
     expect(tooltip()!.textContent).not.toContain('channelMonitorV3.tooltip.successRate')
     expect(tooltip()!.querySelector('[data-testid="monitor-v3-tooltip-probe-note"]')).toBeNull()
 
     await cells[1].trigger('click')
+    expect(tooltip()!.querySelector('[data-testid="monitor-v3-tooltip-probe"]')).toBeNull()
     expect(tooltip()!.textContent).toContain('channelMonitorV3.tooltip.probeSlow')
     expect(tooltip()!.textContent).toContain('channelMonitorV3.tooltip.seconds:{"value":"12"}')
-    expect(tooltip()!.querySelector('[data-testid="monitor-v3-tooltip-probe-note"]')).not.toBeNull()
+    expect(tooltip()!.querySelector('[data-testid="monitor-v3-tooltip-probe-note"]')).toBeNull()
 
     await cells[2].trigger('click')
+    expect(tooltip()!.querySelector('[data-testid="monitor-v3-tooltip-probe"]')).toBeNull()
     expect(tooltip()!.textContent).toContain('channelMonitorV3.tooltip.error')
     expect(tooltip()!.textContent).toContain('channelMonitorV3.errors.wrong_answer')
+    expect(tooltip()!.querySelector('[data-testid="monitor-v3-tooltip-probe-note"]')).toBeNull()
     expect(tooltip()!.textContent).toContain('channelMonitorV3.tooltip.probeLatency—')
     expect(tooltip()!.querySelector('[data-testid="monitor-v3-tooltip-volume"]')!.textContent).toContain('channelMonitorV3.tooltip.probeVolume:{"probes":1,"requests":1}')
 

@@ -208,8 +208,7 @@
               <StatusDot :status="detail.cell.status" />
               {{ t(`channelMonitorV3.status.${detail.cell.status}`) }}
             </span>
-            <span v-if="detail.cell.probed" class="rounded bg-gray-100 px-1.5 py-px text-[10px] text-gray-600 dark:bg-dark-700 dark:text-gray-300" data-testid="monitor-v3-tooltip-probe">{{ t('channelMonitorV3.tooltip.probe') }}</span>
-            <span v-else class="font-mono text-[11px] text-gray-500 dark:text-gray-400">{{ t('channelMonitorV3.tooltip.successRate', { value: formatMonitorV3Rate(detail.cell.success_rate) }) }}</span>
+            <span v-if="!detail.cell.probed" class="font-mono text-[11px] text-gray-500 dark:text-gray-400">{{ t('channelMonitorV3.tooltip.successRate', { value: formatMonitorV3Rate(detail.cell.success_rate) }) }}</span>
           </div>
           <p class="mt-1 flex items-center justify-between gap-3 text-[11px] text-gray-500 dark:text-gray-400">
             <span>{{ t(detail.cell.probed ? 'channelMonitorV3.tooltip.probeLatency' : 'channelMonitorV3.tooltip.ttft') }}</span>
@@ -221,9 +220,6 @@
             {{ t(detail.cell.status === 'down' ? 'channelMonitorV3.tooltip.error' : 'channelMonitorV3.tooltip.note') }}
           </p>
           <p class="mt-0.5 text-gray-700 dark:text-gray-200">{{ note(detail) }}</p>
-          <p v-if="detail.cell.probed && detail.cell.status !== 'operational'" class="mt-1 text-[11px] text-gray-500 dark:text-gray-400" data-testid="monitor-v3-tooltip-probe-note">
-            {{ t('channelMonitorV3.tooltip.probeNote') }}
-          </p>
         </div>
         <div class="flex items-center justify-between gap-2 border-t border-gray-100 px-3 py-1.5 text-[10px] text-gray-400 dark:border-dark-700 dark:text-gray-500">
           <span class="truncate">{{ detail.component.name }}<template v-if="detail.component.model"> · {{ detail.component.model }}</template></span>
@@ -331,7 +327,7 @@ function errorText(category: string | undefined) {
 function note({ component, cell, index }: Detail) {
   if (cell.probed) {
     if (cell.status === 'down') return errorText(cell.top_error)
-    return t(cell.status === 'degraded' ? 'channelMonitorV3.tooltip.probeSlow' : 'channelMonitorV3.tooltip.probeNote')
+    return cell.status === 'degraded' ? t('channelMonitorV3.tooltip.probeSlow') : ''
   }
   if (cell.status === 'insufficient') {
     const live = component === props.status?.featured || props.status?.window.latest
