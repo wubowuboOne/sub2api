@@ -299,9 +299,14 @@ gateway:
   # Includes response-header wait; does not apply to passthrough or WebSocket transports.
   # A timed-out request may already have incurred upstream usage; account failover can therefore duplicate upstream billing.
   # 超时请求可能已产生上游用量；切换账号重试可能导致上游重复计费。
-  # Pre-output attempt staging is capped at 8 MiB; overflow fails over without exposing partial SSE data.
-  # 首次输出前的单次尝试暂存上限为 8 MiB；溢出时切号且不暴露不完整 SSE 数据。
+  # Pre-output staging is capped at 8 MiB unless configured OpenAI pool retries are active.
+  # 未启用 502 同账号重试的账号保留 8 MiB 暂存限制。
   openai_first_output_timeout_seconds: 0
+  # OpenAI pools with configured 502 retries: native first-output line guard (32 MiB),
+  # and total private retry staging (64 MiB). Zero selects the defaults.
+  # Other accounts keep their existing limits. gateway.max_line_size still applies.
+  openai_stream_retry_max_line_bytes: 33554432
+  openai_stream_retry_max_buffer_bytes: 67108864
   # Trusted OpenAI OAuth plugin metadata delivery; opt-in and requires a compatible signed plugin.
   # 提前提交会缩小首正文前的故障切换窗口；元数据不改变语义 TTFT。
   openai_plugin_sse_early_events_enabled: false

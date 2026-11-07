@@ -37,6 +37,28 @@ func TestOpenAIFirstOutputFailoverStopsAfterOneAccountSwitch(t *testing.T) {
 	require.Equal(t, 1, count)
 }
 
+func TestOpenAIConfiguredSizeFailureUsesAccountBudget(t *testing.T) {
+	f := &service.UpstreamFailoverError{StatusCode: 502, SafeToFailoverAfterWrite: true, RetryableOnSameAccount: true, ConfiguredStreamRetry: true}
+	count := 0
+	for range 11 {
+		require.False(t, openAIFirstOutputFailoverExhausted(f, &count))
+	}
+	require.Zero(t, count)
+}
+
+func TestOpenAISizeBudgetPreservesOtherRecoveryLimits(t *testing.T) {
+	for _, f := range []*service.UpstreamFailoverError{
+		{StatusCode: 502, SafeToFailoverAfterWrite: true},
+		{StatusCode: 502, SafeToFailoverAfterWrite: true, RetryableOnSameAccount: true},
+		{StatusCode: 504, SafeToFailoverAfterWrite: true, RetryableOnSameAccount: true},
+		{StatusCode: 502, SafeToFailoverAfterWrite: true, ConfiguredStreamRetry: true},
+	} {
+		count := 0
+		require.False(t, openAIFirstOutputFailoverExhausted(f, &count))
+		require.True(t, openAIFirstOutputFailoverExhausted(f, &count))
+	}
+}
+
 func TestOpenAIForwardMayFailoverAfterQueueHeartbeat(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	recorder := httptest.NewRecorder()

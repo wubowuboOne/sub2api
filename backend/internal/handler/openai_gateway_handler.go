@@ -4621,6 +4621,11 @@ func openAIFirstOutputFailoverExhausted(failoverErr *service.UpstreamFailoverErr
 	if failoverErr == nil || !failoverErr.SafeToFailoverAfterWrite || switchCount == nil {
 		return false
 	}
+	// Replay safety is not a timeout classification. Buffered size failures
+	// must consume the configured account budget, not this timeout-only cap.
+	if failoverErr.StatusCode == http.StatusBadGateway && failoverErr.RetryableOnSameAccount && failoverErr.ConfiguredStreamRetry {
+		return false
+	}
 	if *switchCount >= maxOpenAIFirstOutputTimeoutSwitches {
 		return true
 	}

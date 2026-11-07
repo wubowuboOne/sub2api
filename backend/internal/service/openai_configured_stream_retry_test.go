@@ -151,7 +151,8 @@ func TestOpenAIConfiguredStreamRetryStagingRemainsBounded(t *testing.T) {
 			c, rec := newOpenAIConfiguredRetryContext()
 			line := configuredRetryEvent(fmt.Sprintf("{\"type\":\"response.output_text.delta\",\"output_index\":0,\"delta\":%q}", strings.Repeat("x", openAIFirstOutputStageMaxBytes/2)))
 			resp := &http.Response{StatusCode: 200, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(line + line + line))}
-			err := runConfiguredRetryStream(&OpenAIGatewayService{cfg: &config.Config{}}, c, resp, newConfiguredStreamRetryAccount(), path)
+			cfg := &config.Config{Gateway: config.GatewayConfig{OpenAIStreamRetryMaxBufferBytes: openAIFirstOutputStageMaxBytes}}
+			err := runConfiguredRetryStream(&OpenAIGatewayService{cfg: cfg}, c, resp, newConfiguredStreamRetryAccount(), path)
 			var failover *UpstreamFailoverError
 			require.ErrorAs(t, err, &failover)
 			require.True(t, failover.RetryableOnSameAccount)

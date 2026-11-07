@@ -919,7 +919,7 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 	var streamNonFailoverErr error
 	var retryStage *openAIFirstOutputStage
 	if openAIStreamBuffersConfiguredRetry(account) {
-		retryStage = newDefaultOpenAIFirstOutputStage()
+		retryStage = s.newOpenAIStreamOutputStage(account)
 		defer func() {
 			if err := retryStage.Close(); err != nil {
 				logger.L().Warn("openai chat_completions stream: retry staging cleanup failed", zap.Error(err))
@@ -1310,6 +1310,9 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 		}
 		if err := scanner.Err(); err != nil {
 			handleScanErr(err)
+			if failover := s.openAIRetryLineLimitError(c, account, requestID, err, clientDisconnected, clientOutputStarted); failover != nil {
+				return resultWithUsage(), failover
+			}
 			if clientDisconnected || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 				return resultWithUsage(), fmt.Errorf("stream usage incomplete: %w", err)
 			}
@@ -1385,6 +1388,9 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 			}
 			if ev.err != nil {
 				handleScanErr(ev.err)
+				if failover := s.openAIRetryLineLimitError(c, account, requestID, ev.err, clientDisconnected, clientOutputStarted); failover != nil {
+					return resultWithUsage(), failover
+				}
 				if clientDisconnected || errors.Is(ev.err, context.Canceled) || errors.Is(ev.err, context.DeadlineExceeded) {
 					return resultWithUsage(), fmt.Errorf("stream usage incomplete: %w", ev.err)
 				}

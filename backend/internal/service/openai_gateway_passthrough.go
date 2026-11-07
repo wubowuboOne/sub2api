@@ -2216,9 +2216,11 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthroughWithImage(
 	pendingLines := make([]string, 0, 8)
 	var pendingLineBytes int64
 	bufferRetryAttempt := openAIStreamBuffersConfiguredRetry(account)
+	pendingLineLimit := int64(openAIFirstOutputStageMaxBytes)
 	var retryStage *openAIFirstOutputStage
 	if bufferRetryAttempt {
-		retryStage = newDefaultOpenAIFirstOutputStage()
+		_, pendingLineLimit = s.openAIStreamRetryLimits()
+		retryStage = s.newOpenAIStreamOutputStage(account)
 		defer func() {
 			if err := retryStage.Close(); err != nil {
 				logger.LegacyPrintf("service.openai_gateway", "OpenAI passthrough retry staging cleanup failed: account=%d error=%v", account.ID, err)
@@ -2333,7 +2335,7 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthroughWithImage(
 		if err := retryStage.Close(); err != nil {
 			logger.LegacyPrintf("service.openai_gateway", "OpenAI passthrough failed retry staging cleanup failed: account=%d error=%v", account.ID, err)
 		}
-		retryStage = newDefaultOpenAIFirstOutputStage()
+		retryStage = s.newOpenAIStreamOutputStage(account)
 		if eventType != "" {
 			_, _ = retryStage.WriteString("event: " + eventType + "\n")
 		}
@@ -2671,7 +2673,7 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthroughWithImage(
 			holdAttempt := bufferRetryAttempt && !sawTerminalEvent
 			if !clientOutputStarted && (!lineStartsClientOutput || holdAttempt) && (line != "" || !earlyMetadataPending) {
 				lineBytes := int64(len(line)) + 1
-				if lineBytes > openAIFirstOutputStageMaxBytes-pendingLineBytes {
+				if lineBytes > pendingLineLimit-pendingLineBytes {
 					return resultWithUsage(), s.newOpenAIStreamFailoverError(c, account, true, upstreamRequestID, nil, "OpenAI passthrough pre-output staging limit exceeded")
 				}
 				if retryStage != nil {
@@ -2764,6 +2766,9 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthroughWithImage(
 		}
 		if errors.Is(err, bufio.ErrTooLong) {
 			logger.LegacyPrintf("service.openai_gateway", "[OpenAI passthrough] SSE line too long: account=%d max_size=%d error=%v", account.ID, maxLineSize, err)
+			if bufferRetryAttempt && !clientDisconnected && !openAIStreamClientOutputStarted(c, clientOutputStarted) && c.Request.Context().Err() == nil {
+				return resultWithUsage(), s.newOpenAIStreamFailoverError(c, account, true, upstreamRequestID, nil, "OpenAI SSE line exceeds configured maximum before output")
+			}
 			return resultWithUsage(), err
 		}
 		if !openAIStreamClientOutputStarted(c, clientOutputStarted) {

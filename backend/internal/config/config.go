@@ -67,6 +67,11 @@ const DefaultUpstreamResponseReadMaxBytes int64 = 128 * 1024 * 1024
 // 可通过 gateway.models_list_read_max_bytes 配置项覆盖。
 const DefaultModelsListReadMaxBytes int64 = 8 * 1024 * 1024
 
+const (
+	DefaultOpenAIStreamRetryMaxLineBytes   = 32 * 1024 * 1024
+	DefaultOpenAIStreamRetryMaxBufferBytes = 64 * 1024 * 1024
+)
+
 type Config struct {
 	Runtime                 RuntimeConfig `mapstructure:"runtime"`
 	astraRoutingLoader      atomic.Pointer[astraRoutingLoader]
@@ -1180,6 +1185,10 @@ type GatewayConfig struct {
 	OpenAIUploadTimeoutSeconds int `mapstructure:"openai_upload_timeout_seconds"`
 	// Shared HTTP budget before the first complete model output event; zero disables it.
 	OpenAIPreOutputBudgetSeconds int `mapstructure:"openai_pre_output_budget_seconds"`
+	// Only for OpenAI pools buffering configured 502 retries. The line limit
+	// applies before semantic output; existing post-output reader limits remain.
+	OpenAIStreamRetryMaxLineBytes   int   `mapstructure:"openai_stream_retry_max_line_bytes"`
+	OpenAIStreamRetryMaxBufferBytes int64 `mapstructure:"openai_stream_retry_max_buffer_bytes"`
 	// OpenAIHighEffortFirstOutputTimeoutSeconds: high/xhigh/max 推理的首个语义输出超时（秒）。
 	// 0 表示回退到 OpenAIFirstOutputTimeoutSeconds。
 	OpenAIHighEffortFirstOutputTimeoutSeconds int `mapstructure:"openai_high_effort_first_output_timeout_seconds"`
@@ -2698,6 +2707,8 @@ func setDefaults() {
 	viper.SetDefault("gateway.openai_response_header_timeout", 0)
 	viper.SetDefault("gateway.grok_response_header_timeout", 120)
 	viper.SetDefault("gateway.openai_first_output_timeout_seconds", 0)
+	viper.SetDefault("gateway.openai_stream_retry_max_line_bytes", DefaultOpenAIStreamRetryMaxLineBytes)
+	viper.SetDefault("gateway.openai_stream_retry_max_buffer_bytes", DefaultOpenAIStreamRetryMaxBufferBytes)
 	viper.SetDefault("gateway.openai_plugin_sse_early_events_enabled", false)
 	viper.SetDefault("gateway.openai_upload_timeout_seconds", 0)
 	viper.SetDefault("gateway.openai_pre_output_budget_seconds", 0)
@@ -3984,6 +3995,12 @@ func (c *Config) Validate() error {
 	}
 	if c.Gateway.MaxLineSize < 0 {
 		return fmt.Errorf("gateway.max_line_size must be non-negative")
+	}
+	if n := c.Gateway.OpenAIStreamRetryMaxLineBytes; n < 0 || n > 128*1024*1024 || (n > 0 && n < 1024*1024) {
+		return fmt.Errorf("gateway.openai_stream_retry_max_line_bytes must be 0 or between 1MiB and 128MiB")
+	}
+	if n := c.Gateway.OpenAIStreamRetryMaxBufferBytes; n < 0 || n > 512*1024*1024 || (n > 0 && n < 1024*1024) {
+		return fmt.Errorf("gateway.openai_stream_retry_max_buffer_bytes must be 0 or between 1MiB and 512MiB")
 	}
 	if c.Gateway.MaxLineSize != 0 && c.Gateway.MaxLineSize < 1024*1024 {
 		return fmt.Errorf("gateway.max_line_size must be at least 1MB")

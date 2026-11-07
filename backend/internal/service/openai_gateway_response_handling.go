@@ -136,7 +136,7 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 	bufferedWriter := bufio.NewWriterSize(w, 4*1024)
 	var firstOutputStage *openAIFirstOutputStage
 	if stageFirstOutput {
-		firstOutputStage = newDefaultOpenAIFirstOutputStage()
+		firstOutputStage = s.newOpenAIStreamOutputStage(account)
 		defer func() {
 			if err := firstOutputStage.Close(); err != nil {
 				logger.LegacyPrintf("service.openai_gateway", "OpenAI first-output staging cleanup failed: account=%d model=%s error=%v", account.ID, originalModel, err)
@@ -178,11 +178,19 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 	responseID := ""
 	var firstOutputScanGuard atomic.Bool
 	firstOutputScanGuard.Store(stageFirstOutput)
+	guardedLineLimit := openAIFirstOutputStageMaxBytes + openAIFirstOutputScannerFramingAllowance
+	if bufferRetryAttempt {
+		guardedLineLimit, _ = s.openAIStreamRetryLimits()
+	}
 	scanner := bufio.NewScanner(resp.Body)
 	scanBuf := getSSEScannerBuf64K()
 	scanner.Buffer(scanBuf[:0], maxLineSize)
 	if stageFirstOutput {
-		scanner.Split(openAIFirstOutputDynamicScanLines(&firstOutputScanGuard))
+		if bufferRetryAttempt {
+			scanner.Split(openAIFirstOutputDynamicScanLines(&firstOutputScanGuard, guardedLineLimit))
+		} else {
+			scanner.Split(openAIFirstOutputDynamicScanLines(&firstOutputScanGuard))
+		}
 	}
 	documentScanner := newOpenAISSEJSONDocumentScanner(scanner)
 	if requesttiming.From(ctx) != nil {
@@ -309,6 +317,7 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 			} else {
 				failoverErr := s.newOpenAIStreamFailoverError(c, account, false, upstreamRequestID, nil, message)
 				failoverErr.SafeToFailoverAfterWrite = true
+				failoverErr.ConfiguredStreamRetry = bufferRetryAttempt
 				streamEarlyErr = failoverErr
 			}
 			_ = resp.Body.Close()
@@ -526,12 +535,13 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 		privateFirstOutput := firstOutputStage != nil && !firstOutputStage.closed &&
 			!clientDisconnected && !openAIStreamClientOutputStarted(c, clientOutputStarted)
 		if errors.Is(scanErr, errOpenAIFirstOutputScannerLimit) && privateFirstOutput {
-			logger.LegacyPrintf("service.openai_gateway", "SSE token exceeded guarded first-output limit: account=%d limit=%d error=%v", account.ID, openAIFirstOutputStageMaxBytes+openAIFirstOutputScannerFramingAllowance, scanErr)
+			logger.LegacyPrintf("service.openai_gateway", "SSE token exceeded guarded first-output limit: account=%d limit=%d error=%v", account.ID, guardedLineLimit, scanErr)
 			failoverErr := s.newOpenAIStreamFailoverError(
 				c, account, false, upstreamRequestID, nil,
 				"OpenAI SSE line exceeds guarded first-output limit",
 			)
 			failoverErr.SafeToFailoverAfterWrite = true
+			failoverErr.ConfiguredStreamRetry = bufferRetryAttempt
 			return resultWithUsage(), failoverErr, true
 		}
 		if errors.Is(scanErr, bufio.ErrTooLong) && privateFirstOutput {
@@ -541,6 +551,7 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 				"OpenAI SSE line exceeds guarded first-output limit",
 			)
 			failoverErr.SafeToFailoverAfterWrite = true
+			failoverErr.ConfiguredStreamRetry = bufferRetryAttempt
 			return resultWithUsage(), failoverErr, true
 		}
 		if sawTerminalEvent {
@@ -751,7 +762,7 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 					if err := firstOutputStage.Close(); err != nil {
 						logger.LegacyPrintf("service.openai_gateway", "OpenAI failed retry staging cleanup failed: account=%d error=%v", account.ID, err)
 					}
-					firstOutputStage = newDefaultOpenAIFirstOutputStage()
+					firstOutputStage = s.newOpenAIStreamOutputStage(account)
 					_, _ = firstOutputStage.WriteString("event: " + eventType + "\n")
 				}
 				forceFlushFailedEvent = true
@@ -1023,10 +1034,9 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 		processed chan struct{}
 	}
 	// 独立 goroutine 读取上游，避免读取阻塞影响 keepalive/超时处理
-	// Guard mode permits one queued token plus the token being processed. With
-	// the guarded scanner cap this bounds scanner/channel retention near 16 MiB;
-	// the timeout-disabled path preserves the legacy depth of 16.
-	events := make(chan scanEvent, openAIFirstOutputEventQueueSize(guardFirstOutput))
+	// Guarded and retry-buffered attempts limit queued tokens so larger private
+	// events do not multiply by the legacy channel depth.
+	events := make(chan scanEvent, openAIFirstOutputEventQueueSize(guardFirstOutput || bufferRetryAttempt))
 	done := make(chan struct{})
 	sendEvent := func(ev scanEvent) bool {
 		if firstOutputScanGuard.Load() {

@@ -68,22 +68,26 @@ func openAIFirstOutputEventQueueSize(guardFirstOutput bool) int {
 	return openAIDefaultStreamQueueSize
 }
 
-func openAIFirstOutputDynamicScanLines(guardActive *atomic.Bool) bufio.SplitFunc {
+func openAIFirstOutputDynamicScanLines(guardActive *atomic.Bool, configuredLimits ...int) bufio.SplitFunc {
+	limit := openAIFirstOutputStageMaxBytes + openAIFirstOutputScannerFramingAllowance
+	configured := len(configuredLimits) > 0 && configuredLimits[0] > 0
+	if configured {
+		limit = configuredLimits[0]
+	}
 	return func(data []byte, atEOF bool) (advance int, token []byte, err error) {
 		advance, token, err = bufio.ScanLines(data, atEOF)
 		if err != nil || guardActive == nil || !guardActive.Load() {
 			return advance, token, err
 		}
-		limit := openAIFirstOutputStageMaxBytes + openAIFirstOutputScannerFramingAllowance
 		if token != nil {
 			if len(token) > limit {
 				return 0, nil, errOpenAIFirstOutputScannerLimit
 			}
 			return advance, token, nil
 		}
-		// At the limit with no delimiter, another byte would necessarily exceed
-		// the guarded token budget. Fail before Scanner grows toward MaxLineSize.
-		if len(data) >= limit {
+		// A configured limit counts the line, excluding LF/CRLF. Keep enough
+		// room for a fragmented delimiter; the legacy guard remains unchanged.
+		if (!configured && len(data) >= limit) || (configured && len(data) > limit+1) {
 			return 0, nil, errOpenAIFirstOutputScannerLimit
 		}
 		return advance, token, nil

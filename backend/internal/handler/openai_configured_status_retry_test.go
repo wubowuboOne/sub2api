@@ -120,6 +120,7 @@ func TestOpenAIResponsesConfiguredStatusRetriesSameAccount(t *testing.T) {
 		retryStatus       int
 		disablePool       bool
 		bufferedOutput    bool
+		maxLineSize       int
 	}{
 		{
 			name:              "bps_stream_error",
@@ -168,6 +169,11 @@ data: {"response":{"created_at":1793884529,"error":{"code":"bps_stream_error","m
 		},
 	}
 	streamRetryBase := cases[0]
+	lineLimit := cases[0]
+	lineLimit.name, lineLimit.accountID, lineLimit.retryCount = "guarded_line_limit", 59328, 10
+	lineLimit.maxLineSize = 1024 * 1024
+	lineLimit.body = "data: " + strings.Repeat("x", 2*1024*1024) + "\n\n"
+	cases = append(cases, lineLimit)
 	streamRetryBase.accountID = 59327
 	streamRetryBase.model = "gpt-6.1-sol"
 	streamRetryBase.upstreamRequestID = "stream-transport-retry"
@@ -324,6 +330,7 @@ data: {"response":{"created_at":1793884529,"error":{"code":"bps_stream_error","m
 					}
 					cfg.Default.RateMultiplier = 1
 					cfg.Gateway.MaxAccountSwitches = 1
+					cfg.Gateway.MaxLineSize = tt.maxLineSize
 					upstream := &openAIConfiguredStatusRetryUpstream{status: tt.status, body: tt.body, contentType: tt.contentType, upstreamRequestID: tt.upstreamRequestID}
 					if tt.transportErr != nil {
 						upstream.errorFactory = func() error {
@@ -463,6 +470,7 @@ func TestOpenAIMessagesConfiguredStatusRetriesSameAccount(t *testing.T) {
 
 type messagesRetryCase struct {
 	chat                                        bool
+	responses, passthrough, lineLimit           bool
 	transportErr                                error
 	successAfter                                int
 	name                                        string
@@ -517,6 +525,12 @@ func runMessagesRetryCase(t *testing.T, test messagesRetryCase) {
 	cfg := &config.Config{RunMode: config.RunModeSimple}
 	cfg.Default.RateMultiplier = 1
 	cfg.Gateway.MaxAccountSwitches = 1
+	if test.lineLimit {
+		cfg.Gateway.MaxLineSize = 1024 * 1024
+	}
+	if test.passthrough {
+		accountRepo.accounts[0].Extra["openai_passthrough"] = true
+	}
 	upstream := &openAIConfiguredStatusRetryUpstream{
 		status: http.StatusOK, contentType: "text/event-stream", upstreamRequestID: "29f351b8-a09e-4b48-9058-15642b01cb6f",
 		body: `event: response.created
@@ -553,6 +567,9 @@ data: {"response":{"created_at":1793894912,"error":{"code":"bps_stream_error","m
 	}
 	if test.realOutput {
 		upstream.body = strings.Replace(upstream.body, "event: response.failed", "data: "+`{"type":"response.output_text.delta","delta":"partial"}`+"\n\nevent: response.failed", 1)
+	}
+	if test.lineLimit {
+		upstream.body = "data: {\"type\":\"response.output_text.delta\",\"delta\":\"failed_attempt_only\"}\n\ndata: " + strings.Repeat("x", 2*1024*1024) + "\n\n"
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
@@ -609,7 +626,13 @@ data: {"type":"response.completed","response":{"id":"resp_messages_success","sta
 	if test.chat {
 		c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"gpt-6-sol","messages":[{"role":"user","content":"hello"}],"stream":true}`))
 	}
+	if test.responses {
+		c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"gpt-6-sol","input":"hello","stream":true,"prompt_cache_key":"stable-size-limit-cache"}`))
+	}
 	c.Request.Header.Set("Content-Type", "application/json")
+	if test.lineLimit {
+		c.Request.Header.Set("session_id", "stable-size-limit-session")
+	}
 	c.Request = c.Request.WithContext(ctx)
 	if test.streamHeartbeat {
 		c.Writer = &messagesRetryHeartbeatWriter{ResponseWriter: c.Writer, beat: beat}
@@ -627,7 +650,9 @@ data: {"type":"response.completed","response":{"id":"resp_messages_success","sta
 		recordGatewayStreamHeartbeat(c, written)
 		c.Writer.Flush()
 	}
-	if test.chat {
+	if test.responses {
+		h.Responses(c)
+	} else if test.chat {
 		h.ChatCompletions(c)
 	} else {
 		h.Messages(c)
@@ -636,10 +661,18 @@ data: {"type":"response.completed","response":{"id":"resp_messages_success","sta
 	require.NotContains(t, rec.Body.String(), "call_failed")
 	upstream.mu.Lock()
 	calls := append([]int64(nil), upstream.accountIDs...)
+	bodies := append([][]byte(nil), upstream.requestBodies...)
+	headers := append([]http.Header(nil), upstream.requestHeaders...)
 	upstream.mu.Unlock()
 	require.Len(t, calls, test.wantCalls, "Messages must honor retry count, status and output boundaries")
 	for _, id := range calls {
 		require.Equal(t, accountID, id)
+	}
+	if test.lineLimit {
+		for i := 1; i < len(bodies); i++ {
+			require.Equal(t, bodies[0], bodies[i], "size retries preserve request and cache key")
+			require.Equal(t, headers[0].Get("session_id"), headers[i].Get("session_id"))
+		}
 	}
 	wantKind := "failover"
 	wantStatus := http.StatusBadGateway
@@ -651,7 +684,9 @@ data: {"type":"response.completed","response":{"id":"resp_messages_success","sta
 		wantEvents = test.successAfter
 		require.Equal(t, http.StatusOK, rec.Code)
 		require.Contains(t, rec.Body.String(), "recovered answer")
-		if test.chat {
+		if test.responses {
+			require.Equal(t, 1, strings.Count(rec.Body.String(), `"type":"response.completed"`))
+		} else if test.chat {
 			require.Equal(t, 1, strings.Count(rec.Body.String(), "data: [DONE]"))
 		} else {
 			require.Equal(t, 1, strings.Count(rec.Body.String(), "event: message_start"))
@@ -702,5 +737,13 @@ func TestOpenAIChatConfiguredStatusRetriesSameAccount(t *testing.T) {
 		{name: "reasoning_tool_recovers_after_two", chat: true, retries: 10, retryStatus: http.StatusBadGateway, wantCalls: 3, successAfter: 2, partialPrelude: true},
 	} {
 		t.Run(test.name, func(t *testing.T) { runMessagesRetryCase(t, test) })
+	}
+}
+
+func TestOpenAISizeLimitRecoverySettlesOnce(t *testing.T) {
+	for _, path := range []string{"native", "passthrough", "messages", "chat"} {
+		t.Run(path, func(t *testing.T) {
+			runMessagesRetryCase(t, messagesRetryCase{name: path, retries: 10, retryStatus: http.StatusBadGateway, wantCalls: 3, successAfter: 2, lineLimit: true, chat: path == "chat", responses: path == "native" || path == "passthrough", passthrough: path == "passthrough"})
+		})
 	}
 }

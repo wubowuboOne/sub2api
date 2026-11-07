@@ -1059,7 +1059,7 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 	firstClientOutputEvent := ""
 	firstClientOutputItemType := ""
 	bufferRetryAttempt := openAIStreamBuffersConfiguredRetry(account)
-	preamble := newDefaultOpenAIFirstOutputStage()
+	preamble := s.newOpenAIStreamOutputStage(account)
 	defer func() {
 		if err := preamble.Close(); err != nil {
 			logger.L().Warn("openai messages stream: preamble cleanup failed", zap.Error(err), zap.String("request_id", requestID))
@@ -1374,6 +1374,9 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 		}
 		if err := scanner.Err(); err != nil {
 			handleScanErr(err)
+			if failover := s.openAIRetryLineLimitError(c, account, requestID, err, clientDisconnected, clientOutputStarted); failover != nil {
+				return resultWithUsage(), failover
+			}
 			return resultWithUsage(), fmt.Errorf("stream usage incomplete: %w", err)
 		}
 		if frame, ok := parser.Finish(); ok {
@@ -1447,6 +1450,9 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 			}
 			if ev.err != nil {
 				handleScanErr(ev.err)
+				if failover := s.openAIRetryLineLimitError(c, account, requestID, ev.err, clientDisconnected, clientOutputStarted); failover != nil {
+					return resultWithUsage(), failover
+				}
 				return resultWithUsage(), fmt.Errorf("stream usage incomplete: %w", ev.err)
 			}
 			lastDataAt = time.Now()
