@@ -11,6 +11,8 @@ import (
 	"time"
 
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
+	"go.uber.org/zap"
 )
 
 const maxAPIKeyGroups = 20
@@ -21,6 +23,10 @@ type APIKeyGroupAvailability struct {
 	Available bool
 	Busy      bool
 	Load      float64
+
+	UnavailableReason string         `json:"unavailable_reason,omitempty"`
+	AccountCount      int            `json:"account_count"`
+	AccountExclusions map[string]int `json:"account_exclusions,omitempty"`
 }
 
 type APIKeyGroupRouter interface {
@@ -246,6 +252,7 @@ func (s *APIKeyService) SelectRequestGroup(ctx context.Context, key *APIKey, mod
 	rand.Shuffle(len(candidates), func(i, j int) { candidates[i], candidates[j] = candidates[j], candidates[i] })
 	sort.SliceStable(candidates, func(i, j int) bool { return candidates[i].rate < candidates[j].rate })
 	var best *apiKeyGroupCandidate
+	var failedProbes map[int64]APIKeyGroupAvailability
 	for i := range candidates {
 		candidate := &candidates[i]
 		model := ""
@@ -253,6 +260,15 @@ func (s *APIKeyService) SelectRequestGroup(ctx context.Context, key *APIKey, mod
 			model = models[0]
 		}
 		availability, err := s.groupRouter.ProbeAPIKeyGroup(ctx, candidate.key.Group, model, kind)
+		if err != nil || !availability.Available {
+			if failedProbes == nil {
+				failedProbes = make(map[int64]APIKeyGroupAvailability)
+			}
+			if err != nil && availability.UnavailableReason == "" {
+				availability.UnavailableReason = "probe_error"
+			}
+			failedProbes[candidate.key.Group.ID] = availability
+		}
 		if err != nil {
 			lastErr = err
 			continue
@@ -270,6 +286,16 @@ func (s *APIKeyService) SelectRequestGroup(ctx context.Context, key *APIKey, mod
 		}
 	}
 	if best == nil {
+		logger.FromContext(ctx).Warn("api key group selection failed",
+			zap.String("component", "gateway.group_routing"),
+			zap.Int64("api_key_id", key.ID),
+			zap.Int64("user_id", key.UserID),
+			zap.Int64s("group_ids", key.ConfiguredGroupIDs()),
+			zap.Strings("models", models),
+			zap.String("kind", kind),
+			zap.Any("group_probes", failedProbes),
+			zap.Error(lastErr),
+		)
 		if lastErr != nil {
 			return nil, lastErr
 		}

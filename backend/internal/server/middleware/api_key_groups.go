@@ -56,6 +56,7 @@ func selectAPIKeyRequestGroup(c *gin.Context, keys *service.APIKeyService, subsc
 	if len(models) == 0 && c.Query("model") != "" {
 		models = []string{c.Query("model")}
 	}
+	requestedModels := models
 	if service.IsAPIKeyModelPolicyPath(c.Request.URL.Path) {
 		models = service.APIKeyModelCandidates(key, models)
 	}
@@ -124,6 +125,16 @@ func selectAPIKeyRequestGroup(c *gin.Context, keys *service.APIKeyService, subsc
 	ctx := context.WithValue(c.Request.Context(), ctxkey.UserID, key.UserID)
 	selected, err := keys.SelectRequestGroup(ctx, key, models, kind, subscriptions, accepts, checkBilling)
 	if err != nil {
+		// Authentication can reject before handlers populate Ops request metadata.
+		if len(requestedModels) > 0 {
+			c.Set("ops_model", requestedModels[0])
+			c.Request = c.Request.WithContext(context.WithValue(c.Request.Context(), ctxkey.Model, requestedModels[0]))
+		}
+		stream := jsonBodyRequestsStream(body)
+		if google {
+			stream = strings.HasSuffix(c.Param("modelAction"), ":streamGenerateContent")
+		}
+		c.Set("ops_stream", stream)
 		status := infraerrors.Code(err)
 		message, reason := infraerrors.Message(err), infraerrors.Reason(err)
 		if status >= 500 {
