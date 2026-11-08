@@ -487,7 +487,9 @@ type messagesRetryCase struct {
 	chat                                        bool
 	responses, passthrough, lineLimit           bool
 	http400                                     bool
+	failureCode                                 string
 	transportErr                                error
+	streamReadErr                               error
 	successAfter                                int
 	name                                        string
 	retries, retryStatus, wantCalls             int
@@ -557,6 +559,9 @@ data: {"response":{"created_at":1793894912,"error":{"code":"bps_stream_error","m
 
 `,
 	}
+	if test.failureCode != "" {
+		upstream.body = strings.Replace(upstream.body, `"code":"bps_stream_error"`, fmt.Sprintf(`"code":%q`, test.failureCode), 1)
+	}
 	if test.transportErr != nil {
 		upstream.errorFactory = func() error {
 			upstream.mu.Lock()
@@ -594,16 +599,19 @@ data: {"response":{"created_at":1793894912,"error":{"code":"bps_stream_error","m
 	if test.lineLimit {
 		upstream.body = "data: {\"type\":\"response.output_text.delta\",\"delta\":\"failed_attempt_only\"}\n\ndata: " + strings.Repeat("x", 2*1024*1024) + "\n\n"
 	}
+	if test.streamReadErr != nil {
+		upstream.body = strings.SplitN(upstream.body, "event: response.failed", 2)[0]
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	beat := make(chan struct{}, 1)
-	if test.successAfter > 0 {
+	if test.successAfter > 0 || test.streamReadErr != nil {
 		upstream.bodyFactory = func() io.ReadCloser {
 			upstream.mu.Lock()
 			attempt := len(upstream.accountIDs)
 			upstream.mu.Unlock()
 			body := upstream.body
-			if attempt > test.successAfter {
+			if test.successAfter > 0 && attempt > test.successAfter {
 				body = `data: {"type":"response.created","response":{"id":"resp_messages_success"}}
 
 data: {"type":"response.output_text.delta","output_index":0,"delta":"recovered answer"}
@@ -611,6 +619,8 @@ data: {"type":"response.output_text.delta","output_index":0,"delta":"recovered a
 data: {"type":"response.completed","response":{"id":"resp_messages_success","status":"completed","output":[],"usage":{"input_tokens":1,"output_tokens":1}}}
 
 `
+			} else if test.streamReadErr != nil {
+				return &messagesRetryReadErrorBody{Reader: strings.NewReader(body), err: test.streamReadErr}
 			}
 			return io.NopCloser(strings.NewReader(body))
 		}
@@ -626,6 +636,9 @@ data: {"type":"response.completed","response":{"id":"resp_messages_success","sta
 				select {
 				case <-beat:
 					_, _ = io.WriteString(writer, upstream.body)
+					if test.streamReadErr != nil {
+						_ = writer.CloseWithError(test.streamReadErr)
+					}
 				case <-ctx.Done():
 					_ = writer.CloseWithError(ctx.Err())
 				}
@@ -653,7 +666,7 @@ data: {"type":"response.completed","response":{"id":"resp_messages_success","sta
 		c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"gpt-6-sol","input":"hello","stream":true,"prompt_cache_key":"stable-size-limit-cache"}`))
 	}
 	c.Request.Header.Set("Content-Type", "application/json")
-	if test.lineLimit {
+	if test.lineLimit || test.streamReadErr != nil {
 		c.Request.Header.Set("session_id", "stable-size-limit-session")
 	}
 	c.Request = c.Request.WithContext(ctx)
@@ -691,7 +704,7 @@ data: {"type":"response.completed","response":{"id":"resp_messages_success","sta
 	for _, id := range calls {
 		require.Equal(t, accountID, id)
 	}
-	if test.lineLimit || test.http400 {
+	if test.lineLimit || test.http400 || test.failureCode != "" || test.streamReadErr != nil {
 		for i := 1; i < len(bodies); i++ {
 			require.Equal(t, bodies[0], bodies[i], "retries preserve request and cache key")
 			require.Equal(t, headers[0].Get("session_id"), headers[i].Get("session_id"))
@@ -757,6 +770,38 @@ data: {"type":"response.completed","response":{"id":"resp_messages_success","sta
 	}
 }
 
+type messagesRetryReadErrorBody struct {
+	io.Reader
+	err error
+}
+
+func (b *messagesRetryReadErrorBody) Read(p []byte) (int, error) {
+	n, err := b.Reader.Read(p)
+	if err == io.EOF {
+		return n, b.err
+	}
+	return n, err
+}
+
+func (*messagesRetryReadErrorBody) Close() error { return nil }
+
+func TestOpenAIChatReadFailuresRetrySameAccount(t *testing.T) {
+	for _, test := range []messagesRetryCase{
+		{name: "unexpected_eof_ten_retries", retries: 10, wantCalls: 11, streamReadErr: io.ErrUnexpectedEOF},
+		{name: "unexpected_eof_recovers_after_two", retries: 10, wantCalls: 3, successAfter: 2, streamReadErr: io.ErrUnexpectedEOF},
+		{name: "truncated_recovers", retries: 10, wantCalls: 2, successAfter: 1, streamReadErr: io.EOF},
+		{name: "http2_reset_recovers", retries: 10, wantCalls: 2, successAfter: 1, streamReadErr: fmt.Errorf("stream error: stream ID 1; PROTOCOL_ERROR; received from peer")},
+		{name: "staged_reasoning_and_tool_recovers", retries: 10, wantCalls: 2, successAfter: 1, partialPrelude: true, streamReadErr: io.ErrUnexpectedEOF},
+		{name: "queue_heartbeat", retries: 2, wantCalls: 3, queueHeartbeat: true, streamReadErr: io.ErrUnexpectedEOF},
+		{name: "stream_heartbeat", retries: 2, wantCalls: 3, streamHeartbeat: true, partialPrelude: true, streamReadErr: io.ErrUnexpectedEOF},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			test.chat, test.retryStatus = true, http.StatusBadGateway
+			runMessagesRetryCase(t, test)
+		})
+	}
+}
+
 func TestOpenAIChatConfiguredStatusRetriesSameAccount(t *testing.T) {
 	for _, test := range []messagesRetryCase{
 		{name: "buffered_heartbeat", chat: true, retries: 2, retryStatus: http.StatusBadGateway, wantCalls: 3, streamHeartbeat: true, partialPrelude: true},
@@ -781,6 +826,29 @@ func TestOpenAIHTTP400RetryRecoversAndSettlesOnce(t *testing.T) {
 				name: path, retries: 10, retryStatus: http.StatusBadRequest, wantCalls: 2, successAfter: 1, http400: true,
 				chat: path == "chat", responses: path == "native" || path == "passthrough", passthrough: path == "passthrough",
 			})
+		})
+	}
+}
+
+func TestOpenAIUpstreamTimeoutRetriesSameAccount(t *testing.T) {
+	for _, path := range []string{"native", "passthrough", "messages", "chat"} {
+		t.Run(path+"/recovers", func(t *testing.T) {
+			runMessagesRetryCase(t, messagesRetryCase{
+				name: path, retries: 10, retryStatus: http.StatusBadGateway, wantCalls: 2, successAfter: 1, failureCode: "upstream_timeout",
+				chat: path == "chat", responses: path == "native" || path == "passthrough", passthrough: path == "passthrough",
+			})
+		})
+	}
+	for _, test := range []messagesRetryCase{
+		{name: "chat_ten_retries", retries: 10, wantCalls: 11},
+		{name: "chat_queue_heartbeat", retries: 2, wantCalls: 3, queueHeartbeat: true},
+		{name: "chat_stream_heartbeat", retries: 2, wantCalls: 3, streamHeartbeat: true},
+		{name: "chat_staged_output", retries: 2, wantCalls: 3, partialPrelude: true},
+		{name: "chat_output_already_delivered", wantCalls: 1, realOutput: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			test.chat, test.failureCode, test.retryStatus = true, "upstream_timeout", http.StatusBadGateway
+			runMessagesRetryCase(t, test)
 		})
 	}
 }

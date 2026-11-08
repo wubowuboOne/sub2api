@@ -1058,6 +1058,31 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 				streamFailoverErr = s.newOpenAIStreamFailoverErrorWithModel(c, account, false, requestID, payloadBytes, message, upstreamModel, resp.Header)
 				return true
 			}
+			if shouldFailover && account != nil && account.Platform == PlatformOpenAI &&
+				account.IsPoolMode() && account.GetPoolModeRetryCount() > 0 &&
+				account.IsPoolModeRetryableStatus(openAIStreamFailureStatus(payloadBytes, message)) {
+				reason := "client_output_started"
+				if clientDisconnected {
+					reason = "client_disconnected"
+				}
+				contextError := ""
+				if err := c.Request.Context().Err(); err != nil {
+					contextError = err.Error()
+				}
+				logger.FromContext(c.Request.Context()).Warn("openai.same_account_retry_suppressed",
+					zap.Int64("account_id", account.ID),
+					zap.Int("upstream_status", openAIStreamFailureStatus(payloadBytes, message)),
+					zap.Int("retry_limit", account.GetPoolModeRetryCount()),
+					zap.String("reason", reason),
+					zap.String("forward_path", "chat_completions_responses"),
+					zap.Bool("client_disconnected", clientDisconnected),
+					zap.Bool("client_output_started", clientOutputStarted),
+					zap.Bool("configured_retry_buffered", retryStage != nil),
+					zap.String("request_context_error", contextError),
+					zap.Int64("elapsed_ms", time.Since(startTime).Milliseconds()),
+					zap.String("upstream_request_id", strings.TrimSpace(requestID)),
+				)
+			}
 			message = s.recordOpenAIStreamUpstreamError(c, account, false, requestID, "http_error", payloadBytes, message)
 			defaultStatus, defaultErrType, defaultMsg := http.StatusBadGateway, "upstream_error", message
 			failureStatus := openAIStreamFailureStatus(payloadBytes, message)
@@ -1267,6 +1292,22 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 		return resultWithUsage(), nil
 	}
 
+	retryReadFailure := func(cause error) *UpstreamFailoverError {
+		// Only replay attempts still fully staged for the configured 502 policy.
+		// A canceled upstream request may be a capacity-owner or phase deadline.
+		if retryStage == nil || retryStage.closed || clientDisconnected ||
+			openAIStreamClientOutputStarted(c, clientOutputStarted) || IsResponseCommitted(c) ||
+			(resp.Request != nil && resp.Request.Context().Err() != nil) {
+			return nil
+		}
+		err := s.newOpenAICompatBufferedReadFailoverError(c, account, resp, requestID, &openAICompatBufferedReadError{cause: cause})
+		var failover *UpstreamFailoverError
+		if errors.As(err, &failover) {
+			failover.ConfiguredStreamRetry = true
+			return failover
+		}
+		return nil
+	}
 	handleScanErr := func(err error) {
 		if err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
 			logger.FromContext(c.Request.Context()).Warn("openai chat_completions stream: read error",
@@ -1276,6 +1317,9 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 		}
 	}
 	missingTerminalErr := func() (*OpenAIForwardResult, error) {
+		if failover := retryReadFailure(ErrOpenAIUpstreamStreamTruncated); failover != nil {
+			return nil, failover
+		}
 		return resultWithUsage(), fmt.Errorf("stream usage incomplete: missing terminal event")
 	}
 	processFrame := func(frame openAICompatSSEFrame) bool {
@@ -1312,6 +1356,9 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 			handleScanErr(err)
 			if failover := s.openAIRetryLineLimitError(c, account, requestID, err, clientDisconnected, clientOutputStarted); failover != nil {
 				return resultWithUsage(), failover
+			}
+			if failover := retryReadFailure(err); failover != nil {
+				return nil, failover
 			}
 			if clientDisconnected || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 				return resultWithUsage(), fmt.Errorf("stream usage incomplete: %w", err)
@@ -1391,6 +1438,9 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 				if failover := s.openAIRetryLineLimitError(c, account, requestID, ev.err, clientDisconnected, clientOutputStarted); failover != nil {
 					return resultWithUsage(), failover
 				}
+				if failover := retryReadFailure(ev.err); failover != nil {
+					return nil, failover
+				}
 				if clientDisconnected || errors.Is(ev.err, context.Canceled) || errors.Is(ev.err, context.DeadlineExceeded) {
 					return resultWithUsage(), fmt.Errorf("stream usage incomplete: %w", ev.err)
 				}
@@ -1422,6 +1472,9 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 				zap.String("model", originalModel),
 				zap.Duration("interval", streamInterval),
 			)
+			if failover := retryReadFailure(fmt.Errorf("stream data interval timeout")); failover != nil {
+				return nil, failover
+			}
 			return resultWithUsage(), fmt.Errorf("stream data interval timeout")
 
 		case <-keepaliveCh:
