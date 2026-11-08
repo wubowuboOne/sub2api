@@ -4360,6 +4360,29 @@ func (h *OpenAIGatewayHandler) handleFailoverExhausted(c *gin.Context, failoverE
 	upstreamMsg := service.ExtractUpstreamErrorMessage(responseBody)
 	service.SetOpsUpstreamError(c, statusCode, upstreamMsg, "")
 
+	// Configured retries must not turn a rejected parameter into a generic 502.
+	// Keep passthrough rules above authoritative and preserve SSE framing.
+	apiKey, _ := middleware2.GetAPIKeyFromContext(c)
+	platform := effectiveAPIKeyPlatform(c, apiKey)
+	if failoverErr.RetryableOnSameAccount && (platform == "" || platform == service.PlatformOpenAI) &&
+		service.IsOpenAIUpstreamInvalidRequestError(statusCode, responseBody) {
+		upstreamMsg = service.SanitizeUpstreamErrorMessage(upstreamMsg)
+		if strings.TrimSpace(upstreamMsg) == "" {
+			upstreamMsg = "Upstream rejected the request"
+		}
+		service.SetOpsUpstreamError(c, statusCode, upstreamMsg, "")
+		if service.StopOpenAICompactSSEKeepaliveCommitted(c) {
+			streamStarted = true
+		}
+		if !streamStarted {
+			service.WriteOpenAIUpstreamClientError(c, statusCode, responseBody, upstreamMsg)
+		} else {
+			code := strings.TrimSpace(gjson.GetBytes(responseBody, "error.code").String())
+			h.handleStreamingAwareErrorWithCode(c, statusCode, "invalid_request_error", code, upstreamMsg, true, false)
+		}
+		return
+	}
+
 	// 使用默认的错误映射
 	status, errType, errMsg := h.mapUpstreamError(statusCode)
 	h.handleStreamingAwareError(c, status, errType, errMsg, streamStarted)

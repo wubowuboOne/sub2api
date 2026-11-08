@@ -157,6 +157,17 @@ data: {"response":{"created_at":1793884529,"error":{"code":"bps_stream_error","m
 `,
 		},
 		{
+			name:              "invalid_value_url_400",
+			accountID:         59327,
+			retryCount:        10,
+			model:             "gpt-6.1-sol",
+			upstreamRequestID: "invalid-value-url-retry",
+			status:            http.StatusBadRequest,
+			semanticStatus:    http.StatusBadRequest,
+			contentType:       "application/json",
+			body:              `{"error":{"code":"invalid_value","message":"Upstream rejected the request","param":"url","type":"invalid_request_error"}}`,
+		},
+		{
 			name:              "request_payload_too_large",
 			accountID:         59323,
 			retryCount:        1,
@@ -390,6 +401,10 @@ data: {"response":{"created_at":1793884529,"error":{"code":"bps_stream_error","m
 					}
 
 					h.Responses(c)
+					if tt.name == "invalid_value_url_400" && !queueHeartbeat {
+						require.Equal(t, http.StatusBadRequest, rec.Code)
+						require.JSONEq(t, tt.body, rec.Body.String())
+					}
 					require.NotContains(t, rec.Body.String(), "failed_attempt_only")
 					require.NotContains(t, rec.Body.String(), "call_failed")
 
@@ -471,6 +486,7 @@ func TestOpenAIMessagesConfiguredStatusRetriesSameAccount(t *testing.T) {
 type messagesRetryCase struct {
 	chat                                        bool
 	responses, passthrough, lineLimit           bool
+	http400                                     bool
 	transportErr                                error
 	successAfter                                int
 	name                                        string
@@ -550,6 +566,13 @@ data: {"response":{"created_at":1793894912,"error":{"code":"bps_stream_error","m
 				return &url.Error{Op: "Post", URL: "https://vip.qimux.com/v1/responses", Err: test.transportErr}
 			}
 			return nil
+		}
+	}
+	if test.http400 {
+		upstream.firstResponse = &http.Response{
+			StatusCode: http.StatusBadRequest,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(`{"error":{"code":"invalid_value","message":"Upstream rejected the request","param":"url","type":"invalid_request_error"}}`)),
 		}
 	}
 	if test.opaquePrelude {
@@ -668,14 +691,17 @@ data: {"type":"response.completed","response":{"id":"resp_messages_success","sta
 	for _, id := range calls {
 		require.Equal(t, accountID, id)
 	}
-	if test.lineLimit {
+	if test.lineLimit || test.http400 {
 		for i := 1; i < len(bodies); i++ {
-			require.Equal(t, bodies[0], bodies[i], "size retries preserve request and cache key")
+			require.Equal(t, bodies[0], bodies[i], "retries preserve request and cache key")
 			require.Equal(t, headers[0].Get("session_id"), headers[i].Get("session_id"))
 		}
 	}
 	wantKind := "failover"
 	wantStatus := http.StatusBadGateway
+	if test.http400 {
+		wantStatus = http.StatusBadRequest
+	}
 	if test.transportErr != nil {
 		wantKind, wantStatus = "request_error", 0
 	}
@@ -744,6 +770,17 @@ func TestOpenAISizeLimitRecoverySettlesOnce(t *testing.T) {
 	for _, path := range []string{"native", "passthrough", "messages", "chat"} {
 		t.Run(path, func(t *testing.T) {
 			runMessagesRetryCase(t, messagesRetryCase{name: path, retries: 10, retryStatus: http.StatusBadGateway, wantCalls: 3, successAfter: 2, lineLimit: true, chat: path == "chat", responses: path == "native" || path == "passthrough", passthrough: path == "passthrough"})
+		})
+	}
+}
+
+func TestOpenAIHTTP400RetryRecoversAndSettlesOnce(t *testing.T) {
+	for _, path := range []string{"native", "passthrough", "messages", "chat"} {
+		t.Run(path, func(t *testing.T) {
+			runMessagesRetryCase(t, messagesRetryCase{
+				name: path, retries: 10, retryStatus: http.StatusBadRequest, wantCalls: 2, successAfter: 1, http400: true,
+				chat: path == "chat", responses: path == "native" || path == "passthrough", passthrough: path == "passthrough",
+			})
 		})
 	}
 }

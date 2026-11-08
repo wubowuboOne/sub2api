@@ -342,6 +342,12 @@ func (s *OpenAIGatewayService) shouldFailoverOpenAIUpstreamResponse(account *Acc
 		isOpenAICompatibleModelNotFound400(upstreamBody) {
 		return true
 	}
+	// Honor explicit pool retry settings before treating other 4xx responses as
+	// terminal. Keep request-scoped exclusions above and disabled retries intact.
+	if account != nil && account.IsPoolMode() && account.GetPoolModeRetryCount() > 0 &&
+		account.IsPoolModeRetryableStatus(statusCode) {
+		return true
+	}
 	if s.shouldFailoverUpstreamError(statusCode) {
 		return true
 	}

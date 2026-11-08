@@ -27,6 +27,21 @@ func isOpenAIDeterministicClientError(statusCode int) bool {
 	return statusCode == http.StatusBadRequest
 }
 
+// IsOpenAIUpstreamInvalidRequestError identifies an explicit client error whose
+// diagnostics must survive retry exhaustion, excluding existing special policies.
+func IsOpenAIUpstreamInvalidRequestError(statusCode int, body []byte) bool {
+	if statusCode != http.StatusBadRequest ||
+		strings.TrimSpace(gjson.GetBytes(body, "error.type").String()) != "invalid_request_error" ||
+		isOpenAIUpstreamSessionBlocked(body) || isOpenAIContextWindowError("", body) {
+		return false
+	}
+	if hit, _, _ := detectOpenAICyberPolicy(body); hit {
+		return false
+	}
+	return !isOpenAITransientProcessingError(statusCode, "", body) &&
+		!isOpenAIHTTPUpstreamAccessStateError(statusCode, "", body)
+}
+
 // writeOpenAIUpstreamClientError 以 OpenAI 错误体形状回写确定性客户端错误。
 //
 // 保留上游的 type/code/param：客户端靠 param 定位是哪个字段非法（上游会给出形如
