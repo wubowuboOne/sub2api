@@ -705,6 +705,15 @@ func (a *Account) GetModelMapping() map[string]string {
 	}
 
 	mapping := a.resolveModelMapping(rawMapping)
+	if a.hasOAuthInitialModelSelection() {
+		filtered := make(map[string]string)
+		for source, target := range mapping {
+			if a.oauthInitialSelectionAllows(source) && a.oauthInitialSelectionAllows(target) {
+				filtered[source] = target
+			}
+		}
+		mapping = filtered
+	}
 	if !rawSigReady {
 		rawSig = modelMappingSignature(rawMapping)
 	}
@@ -1056,6 +1065,17 @@ func (a *Account) IsModelSupported(requestedModel string) bool {
 }
 
 func (a *Account) isModelMappingSupported(requestedModel string) bool {
+	if !a.oauthInitialSelectionAllows(requestedModel) || !a.oauthInitialSelectionAllows(a.GetMappedModel(requestedModel)) {
+		return false
+	}
+	if a.hasOAuthInitialModelSelection() {
+		// Consult the stored exact scope before provider defaults can inject
+		// passthroughs, aliases, media fallbacks or an empty-map fallback.
+		target, ok := asAnyModelMapping(a.Credentials["model_mapping"])[requestedModel].(string)
+		if !ok || !a.oauthInitialSelectionAllows(target) {
+			return false
+		}
+	}
 	// Apply the credential boundary before passthrough's model allowlist bypass.
 	if a.IsExcelOAuth() && !a.IsExcelBPSEnabledForModel(requestedModel) {
 		return false
@@ -1810,6 +1830,12 @@ func (a *Account) GetCodingPlanProvider() string {
 	if a.IsCline() {
 		if a.clineAccountAPISupported() {
 			return PlatformCline
+		}
+		return ""
+	}
+	if a.IsMistral() {
+		if a.mistralUsageSupported() {
+			return PlatformMistral
 		}
 		return ""
 	}
