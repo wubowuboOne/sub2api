@@ -4,6 +4,8 @@
  * browser; use a new ID to announce the feature again in a later release.
  */
 export const NEW_FEATURE_NOTICES = {
+  oauthDegradationActions: 'oauth-degradation-actions-initial-announcement',
+  dashboardAccountConcurrency: 'dashboard-account-concurrency-initial-announcement',
   qualityRetestRest: 'quality-retest-rest-initial-announcement',
   keyRisk: 'key-risk-notices-acknowledgement-initial-announcement',
   mistralBudgetUsage: 'mistral-budget-usage-initial-announcement',
@@ -19,10 +21,15 @@ export const NEW_FEATURE_NOTICES = {
   protocolFeatureSwitches: 'protocol-feature-switches-initial-announcement',
   apiKeyModelPolicy: 'api-key-model-policy-initial-announcement',
   apiKeyLongContext: 'api-key-long-context-control-initial-announcement',
+  apiKeyUsageDateRange: 'api-key-usage-date-range-initial-announcement',
   profitOperationsToday: 'profit-operations-today-filter-initial-announcement',
+  profitOperationsTimeRanges: 'profit-operations-time-ranges-initial-announcement',
   vipAutoCredit: 'vip-auto-credit-initial-announcement',
   oauthInitialTOTPRotation429: 'oauth-initial-totp-rotation-on-429-initial-announcement',
+  oauthInitialDisableScheduling429: 'oauth-initial-disable-scheduling-on-429-initial-announcement',
+  oauthInitialWSSettings: 'oauth-initial-ws-settings-initial-announcement',
   aiOpsCodex: 'ai-ops-codex-observe-initial-announcement',
+  aiOpsProposalCancel: 'ai-ops-proposal-cancel-initial-announcement',
   bepusdtPayment: 'bepusdt-embedded-payment-initial-announcement',
   accountDailyScheduling: 'account-daily-schedulable-timers-initial-announcement',
   accountAutoRefreshUpstreamModels: 'account-auto-refresh-upstream-models-initial-announcement',

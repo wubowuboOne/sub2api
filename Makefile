@@ -25,6 +25,7 @@ FRONTEND_CRITICAL_VITEST := \
 	src/components/common/__tests__/PlatformTypeBadge.openaiPlans.spec.ts \
 	src/components/common/__tests__/PlatformTypeBadge.grok.spec.ts \
 	src/views/admin/__tests__/AutoConfigView.spec.ts \
+	src/views/admin/__tests__/OAuthDegradationActions.spec.ts \
 	src/utils/__tests__/openaiTwoFAAdmission.spec.ts \
 	src/components/admin/account/__tests__/BulkExport2FADialog.spec.ts \
 	src/components/admin/account/__tests__/AccountBulkActionsBar.spec.ts \
@@ -124,6 +125,7 @@ FRONTEND_CRITICAL_VITEST := \
 	src/components/admin/moderation/__tests__/ModerationUserQuickEnable.spec.ts \
 	src/api/__tests__/admin.users.spec.ts \
 	src/views/user/__tests__/KeysView.spec.ts \
+	src/api/__tests__/usage.apiKeysRange.spec.ts \
 	src/api/__tests__/channelMonitorV2.spec.ts \
 	src/views/auth/__tests__/LinuxDoCallbackView.spec.ts \
 	src/views/auth/__tests__/WechatCallbackView.spec.ts \

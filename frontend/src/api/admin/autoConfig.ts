@@ -6,10 +6,15 @@ import { apiClient } from '../client'
 import type { ModelBillingConfig } from '@/utils/modelBilling'
 import type { ExcelBPSDefaults } from '@/utils/excelBPSDefaults'
 import type { OAuthModelMappingRule } from '@/utils/oauthModelMappings'
+import type { OpenAIWSMode } from '@/utils/openaiWsMode'
 export type OAuthInitialQualityRule = Pick<ScheduledTestPlan, 'model_id' | 'cron_expression' | 'enabled' | 'max_results' | 'pelican_config'>
 export interface AutoConfig {
+ degradation_action?: import('@/utils/oauthDegradation').OAuthDegradationConfig
  openai_two_fa_admission?: OpenAITwoFAAdmissionConfig
  openai_totp_rotate_on_429?: boolean
+ openai_disable_scheduling_on_429?: boolean
+ openai_ws_mode?: OpenAIWSMode
+ openai_ws_sse_acceleration?: boolean
  quality_rule?: OAuthInitialQualityRule | null
  model_billing?: ModelBillingConfig
  selected_models?: string[] | null
@@ -34,7 +39,7 @@ export interface AutoConfig {
 export async function getAutoConfig(): Promise<AutoConfig> { return (await apiClient.get('/admin/account-ops/auto-config')).data }
 export async function saveAutoConfig(config: AutoConfig): Promise<AutoConfig> { return (await apiClient.put('/admin/account-ops/auto-config', config)).data }
 
-export type AutoConfigEventKind = 'config_saved' | 'initial_applied' | 'concurrency_upgraded' | 'failure_cooldown'
+export type AutoConfigEventKind = 'config_saved' | 'initial_applied' | 'concurrency_upgraded' | 'failure_cooldown' | 'degradation_applied'
 export interface AutoConfigEvent {
   id: number
   account_id: number
@@ -43,6 +48,7 @@ export interface AutoConfigEvent {
   kind: AutoConfigEventKind
   created_at: string
   details: {
+    degradation?: { revision: string; limit_concurrency?: boolean; limit_models?: boolean; limit_groups?: boolean; models: string[] | null; group_ids?: number[]; removed_group_ids?: number[]; threshold_percent: number; degradation_percent: number; quality_samples: number; window_start: string; window_end: string; concurrency_cap: number }
     model_mapping?: Record<string, string>
     config?: AutoConfig
     priority: number

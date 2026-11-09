@@ -23,12 +23,16 @@ describe('NewFeatureBadge', () => {
 
 
   it.each([
+    ['dashboard account concurrency', NEW_FEATURE_NOTICES.dashboardAccountConcurrency],
     ['key risk', NEW_FEATURE_NOTICES.keyRisk],
+    ['API key usage dates', NEW_FEATURE_NOTICES.apiKeyUsageDateRange],
     ['pricing transfer', NEW_FEATURE_NOTICES.channelPricingTransfer],
     ['stream event timing', NEW_FEATURE_NOTICES.streamFirstEventTiming],
     ['Mistral budget usage', NEW_FEATURE_NOTICES.mistralBudgetUsage],
     ['image header timeout groups', NEW_FEATURE_NOTICES.openaiImageHeaderTimeoutGroups],
+    ['profit operations time ranges', NEW_FEATURE_NOTICES.profitOperationsTimeRanges],
     ['quality retest rest', NEW_FEATURE_NOTICES.qualityRetestRest],
+    ['AI operations proposal cancellation', NEW_FEATURE_NOTICES.aiOpsProposalCancel],
   ])('keeps %s dismissal shared and persistent across feature announcements', async (_feature, noticeId) => {
     const pinia = createPinia()
     setActivePinia(pinia)

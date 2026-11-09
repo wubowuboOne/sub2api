@@ -1,4 +1,28 @@
 export default {
+ degradation: {
+  "title": "Degradation actions",
+  "hint": "Independent policy for all OAuth accounts. Uses the same rolling window and complete, conclusive quality probe rounds as Account performance. Applies when the failed-probe percentage meets or exceeds the threshold, not the percentage of all customer requests. A performance pause monitor is not required.",
+  "threshold": "Degradation threshold (%)",
+  "actions": "Actions at the threshold (select one or more)",
+  "limitConcurrency": "Limit concurrency",
+  "limitModels": "Limit models",
+  "limitGroups": "Limit groups",
+  "actionsRequired": "Select at least one action before enabling.",
+  "concurrency": "Target concurrency (default 10)",
+  "thresholdRequired": "Set a threshold before enabling.",
+  "models": "Model scope after action (intersected with existing authorization)",
+  "empty": "No models selected: affected accounts will support no models.",
+  "groups": "Remove account bindings to these groups",
+  "groupsHint": "Select up to 100 groups. Affected accounts leave these groups and later edits cannot reattach them. Other bindings remain; the groups themselves and other accounts are unaffected.",
+  "groupsRequired": "Select at least one group binding to remove.",
+  "unavailableGroup": "Unavailable group; selection retained. Uncheck to remove this ID",
+  "scope": "Only selected actions apply: lower concurrency to the smaller of its current value and target, intersect models with existing authorization, or remove selected group bindings. Applied once; better metrics, disabling or editing the template do not restore changes. Concurrency limits also stop successful requests from ramping it.",
+  "invalid": "Set a threshold from 0 to 100 and select at least one action. Check the selected actions’ concurrency (integer 1–10000), exact model IDs (up to 500), or group selections (1–100).",
+  "event": "Probe degradation {percent}% ≥ {threshold}% · {samples} conclusive rounds · {actions} · window {start} — {end}",
+  "concurrencyEvent": "concurrency {before} → {after}",
+  "modelsEvent": "models: {models}",
+  "groupsEvent": "blocked group bindings: {groups}; removed: {removed}"
+},
   selection: {
     "accountHint": "This account retains its initial model scope (an empty scope disables every model). Normal saves and reauthorization preserve it; changing model mappings takes ownership.",
     "takeOver": "Use manual model settings when saving (release the initial scope; empty mappings restore default support)",
@@ -96,7 +120,11 @@ export default {
   },
   "initial": "Initial OAuth configuration",
   "enable": "Enable",
-  "initialHint": "Applies to new OAuth accounts on the selected platform. These four values override import values. Existing accounts, reauthorization and manual edits do not trigger initial configuration.",
+  "initialHint": "Applies to new OAuth accounts on the selected platform. Template field and switch values override import values. Existing accounts, reauthorization and manual edits do not trigger initial configuration.",
+  ws: {
+    modeHint: 'Set the WS mode for new OpenAI OAuth accounts through initial configuration. Defaults to Context Pool; Off disables WS. Global WS gates still apply. Other modes use the selected method only when gateway.openai_ws.mode_router_v2_enabled=true; otherwise, they use the context pool.',
+    accelerationHint: 'Set the acceleration switch for new OpenAI OAuth accounts through initial configuration. Unchecked by default. Existing accounts, reauthorization and manual edits are unaffected.'
+  },
   "platform": "OAuth platform",
   "priority": "Priority",
   "load_factor": "Load factor",
@@ -106,6 +134,10 @@ export default {
   totp429: {
     label: 'Automatically rotate 2FA after a 429',
     hint: 'Enable for new OpenAI OAuth accounts through initial configuration. After a 429, use the email, password and current 2FA saved in Credential Operations to rotate the secret and store it encrypted. At most one rotation task per account per hour; incomplete credentials or an unresolved rotation prevent automatic rotation.'
+  },
+  disableScheduling429: {
+    label: 'Automatically disable scheduling after a 429',
+    hint: 'Enable for new OpenAI OAuth accounts through initial configuration. An upstream 429 turns off the account scheduling switch, which you can manually re-enable. Can be enabled together with automatic 2FA rotation.'
   },
   "noGroups": "No active matching groups. Create one in group management first.",
   "loadHint": "Lower priority values run first. Load factor controls scheduling frequency independently of concurrency limits and billing multipliers.",
@@ -155,6 +187,7 @@ export default {
     "upgradeDetail": "Concurrency {before} → {after}; {seconds}-second cooldown started.",
     "cooldownDetail": "Request failed; success progress reset and a {seconds}-second cooldown started. Concurrency remains {concurrency}.",
     "kinds": {
+ "degradation_applied": "Degradation applied",
       "config_saved": "Configuration saved",
       "initial_applied": "Initial setup applied",
       "concurrency_upgraded": "Concurrency upgraded",
