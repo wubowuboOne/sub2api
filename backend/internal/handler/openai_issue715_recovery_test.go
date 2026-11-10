@@ -484,7 +484,7 @@ func TestIssue715HTTPConcurrentToolResultsKeepContextWithoutReplay(t *testing.T)
 	}
 }
 
-func TestIssue715HTTPInterruptedToolResultDoesNotReplay(t *testing.T) {
+func TestIssue715HTTPToolResultRetryPreservesContextAndDeliverySafety(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	for _, failure := range []string{"error", "cancel", "pool_failure"} {
 		t.Run(failure, func(t *testing.T) {
@@ -515,7 +515,11 @@ func TestIssue715HTTPInterruptedToolResultDoesNotReplay(t *testing.T) {
 				c.Writer = &issue715DeliveryWriter{ResponseWriter: c.Writer, mode: failure, cancel: cancel}
 				handler.Responses(c)
 			}
-			require.Equal(t, []int64{1, 1}, upstream.ids, "interrupted result submission must not automatically replay generation")
+			wantIDs := []int64{1, 1}
+			if failure == "pool_failure" {
+				wantIDs = append(wantIDs, 1, 1)
+			}
+			require.Equal(t, wantIDs, upstream.ids, "only configured failures may retry, always on the original owner")
 			upstream.mode = ""
 			status, answer = issue715Request(t, handler, issue715Body(true, false), 99, "fixture-715-thread", false)
 			require.Equal(t, 200, status, answer)
@@ -523,7 +527,7 @@ func TestIssue715HTTPInterruptedToolResultDoesNotReplay(t *testing.T) {
 			require.NotContains(t, answer, `"type":"function_call"`)
 			require.Equal(t, 1, toolExecutions)
 			require.Equal(t, 18, balance)
-			require.Equal(t, []int64{1, 1, 1}, upstream.ids)
+			require.Equal(t, append(wantIDs, 1), upstream.ids)
 		})
 	}
 }
@@ -638,7 +642,7 @@ func TestIssue715HTTPFailedDeliveryKeepsCompletedUsage(t *testing.T) {
 	}
 }
 
-func TestIssue715HTTPPoolCustomToolResultNeverReplays(t *testing.T) {
+func TestIssue715HTTPPoolCustomToolResultRetriesOnlyOriginalOwner(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	accounts := issue715Accounts()
 	accounts[0].Type = service.AccountTypeAPIKey
@@ -650,6 +654,9 @@ func TestIssue715HTTPPoolCustomToolResultNeverReplays(t *testing.T) {
 	body := strings.TrimSuffix(issue715Body(false, false), `]}`) + `,{"type":"custom_tool_call","name":"fixture_note","call_id":"custom_fixture_715","input":"note balance 18"},{"type":"custom_tool_call_output","call_id":"custom_fixture_715","output":"fixture note already written"}]}`
 	upstream.mode = "pool_failure"
 	issue715Request(t, handler, body, 99, "fixture-715-thread", false)
-	require.Equal(t, []int64{1, 1}, upstream.ids, "a custom tool result must also stop pool-mode auto replay")
-	require.Contains(t, string(upstream.bodies[1]), "fixture note already written")
+	require.Equal(t, []int64{1, 1, 1, 1}, upstream.ids, "custom tool results must honor configured retries without switching owners")
+	for _, sent := range upstream.bodies[1:] {
+		require.Equal(t, upstream.bodies[1], sent)
+		require.Contains(t, string(sent), "fixture note already written")
+	}
 }

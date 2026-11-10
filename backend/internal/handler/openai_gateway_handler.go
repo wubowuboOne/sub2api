@@ -1254,6 +1254,12 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 						return
 					}
 					if !openAIForwardMayFailover(c, writerSizeBeforeForward, failoverErr) {
+						reqLog.Warn("openai.failover_stopped",
+							zap.String("reason", "downstream_output_started"),
+							zap.Int64("account_id", account.ID),
+							zap.Int("upstream_status", failoverErr.StatusCode),
+							zap.Bool("retryable_on_same_account", failoverErr.RetryableOnSameAccount),
+						)
 						h.gatewayService.ObserveOpenAIAccountHealthFailure(c.Request.Context(), account, err)
 						h.handleFailoverExhausted(c, failoverErr, true)
 						return
@@ -1266,10 +1272,7 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 					if failoverErr.ShouldReportAccountScheduleFailure() {
 						h.gatewayService.ReportOpenAIAccountScheduleResult(account, openAIAccountScheduleModel(c, account, forwardModel, requireCompact, nil), false, nil, err)
 					}
-					if service.OpenAIAgentToolResultContinuation(c.Request.Context()) {
-						h.handleFailoverExhausted(c, failoverErr, streamStarted)
-						return
-					}
+					agentToolResult := service.OpenAIAgentToolResultContinuation(c.Request.Context())
 					if !forbiddenBudget.canRetry(failoverErr, switchCount) {
 						h.handleFailoverExhausted(c, failoverErr, streamStarted)
 						return
@@ -1278,8 +1281,11 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 						h.handleFailoverExhausted(c, failoverErr, streamStarted)
 						return
 					}
-					// 池模式：同账号重试
-					if failoverErr.RetryableOnSameAccount {
+					// Bound tool results may use configured pool retries on their proven owner.
+					// The recovery scheduler and dispatch checks preserve that route on re-entry.
+					allowSameAccountRetry := !agentToolResult ||
+						(account.IsPoolMode() && account.IsPoolModeRetryableStatus(failoverErr.StatusCode))
+					if failoverErr.RetryableOnSameAccount && allowSameAccountRetry {
 						retryLimit := effectiveSameAccountRetryLimit(failoverErr, account)
 						if sameAccountRetryAllowed(failoverErr, sameAccountRetryCount[account.ID], retryLimit) {
 							sameAccountRetryCount[account.ID]++
@@ -1298,6 +1304,18 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 							}
 							continue
 						}
+					}
+					if agentToolResult {
+						reqLog.Warn("openai.failover_stopped",
+							zap.String("reason", "agent_tool_result_continuation"),
+							zap.Int64("account_id", account.ID),
+							zap.Int("upstream_status", failoverErr.StatusCode),
+							zap.Bool("retryable_on_same_account", failoverErr.RetryableOnSameAccount),
+							zap.Int("retry_count", sameAccountRetryCount[account.ID]),
+							zap.Int("retry_limit", effectiveSameAccountRetryLimit(failoverErr, account)),
+						)
+						h.handleFailoverExhausted(c, failoverErr, streamStarted)
+						return
 					}
 					h.gatewayService.RecordOpenAIAccountSwitch()
 					failedAccountIDs[account.ID] = struct{}{}

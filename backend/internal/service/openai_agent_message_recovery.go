@@ -472,9 +472,9 @@ func observeOpenAIAgentRecoveryOutput(c *gin.Context, body []byte, nested bool) 
 	return request.delivery.reserve(items)
 }
 
-// This does not deduplicate client requests or external tools. It only prevents
-// the handler from automatically replaying an ambiguous result submission on a
-// proven native task route, including pool-mode same-account retry.
+// This identifies tool results bound to a proven native task route. They may
+// use configured pool retries on that unchanged owner, but must not switch
+// accounts. This does not deduplicate client requests or external tools.
 func OpenAIAgentToolResultContinuation(ctx context.Context) bool {
 	r := openAIAgentRecoveryFromContext(ctx)
 	return r != nil && r.owner != nil && r.toolResult

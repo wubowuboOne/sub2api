@@ -300,6 +300,6 @@ func TestIssue715ToolResultContinuationCoversCodexOutputTypes(t *testing.T) {
 	for _, typ := range codexToolCallOutputItemTypes {
 		body := issue715OpaqueBody[:len(issue715OpaqueBody)-2] + `,{"type":"` + typ + `","call_id":"fixture-call","output":"fixture already applied"}]}`
 		ctx := svc.WithOpenAIAgentMessageRecovery(context.Background(), c, []byte(body), "fixture-session", "gpt-6-astra")
-		require.True(t, OpenAIAgentToolResultContinuation(ctx), typ+" must stop ambiguous automatic replay")
+		require.True(t, OpenAIAgentToolResultContinuation(ctx), typ+" must retain the proven owner during configured retries")
 	}
 }
