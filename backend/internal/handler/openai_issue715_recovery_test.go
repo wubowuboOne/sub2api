@@ -78,6 +78,9 @@ func (u *issue715Upstream) Do(req *http.Request, _ string, accountID int64, _ in
 	if gjson.GetBytes(body, "input.#(type==function_call_output).output").String() == "ledger balance 18; applied once" {
 		output = `[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Same task: ledger balance 18; update already applied once"}]}]`
 	}
+	if service.HasCompactionTriggerInInput(body) {
+		output = `[{"type":"compaction","encrypted_content":"fixture-compacted-reference"}]`
+	}
 	if strings.HasPrefix(mode, "generated") && !strings.Contains(input, "fixture-task-reference-715") {
 		output = "[" + issue715Agent + "," + strings.TrimPrefix(output, "[")
 		if strings.Contains(mode, "two") {
