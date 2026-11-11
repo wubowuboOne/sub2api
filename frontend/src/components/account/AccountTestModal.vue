@@ -289,6 +289,7 @@ interface PreviewImage {
 const props = defineProps<{
   show: boolean
   account: Account | null
+  initialMode?: 'default' | 'web_search'
 }>()
 
 const emit = defineEmits<{
@@ -313,7 +314,7 @@ const modelAuthError = ref(false)
 let modelLoadGeneration = 0
 let abortController: AbortController | null = null
 const generatedImages = ref<PreviewImage[]>([])
-const testMode = ref<'default' | 'compact' | 'bps_tools'>('default')
+const testMode = ref<'default' | 'compact' | 'bps_tools' | 'web_search'>('default')
 const isOpenAIAccount = computed(() => props.account?.platform === 'openai')
 // Managed accounts authorize BPS through authorization connections and never
 // receive the legacy Excel grant this marker waits for.
@@ -326,11 +327,13 @@ const isBPSAccount = computed(() =>
 const openAITestModeOptions = computed(() => isBPSAccount.value
   ? [
       { value: 'default', label: t('admin.accounts.openai.testModeDefault') },
-      { value: 'bps_tools', label: t('admin.accounts.openai.testModeBPSTools') }
+      { value: 'bps_tools', label: t('admin.accounts.openai.testModeBPSTools') },
+      { value: 'web_search', label: t('admin.accounts.openai.webSearchProbe') }
     ]
   : [
       { value: 'default', label: t('admin.accounts.openai.testModeDefault') },
-      { value: 'compact', label: t('admin.accounts.openai.testModeCompact') }
+      { value: 'compact', label: t('admin.accounts.openai.testModeCompact') },
+      { value: 'web_search', label: t('admin.accounts.openai.webSearchProbe') }
     ])
 const previewImageUrl = ref('')
 const prioritizedGeminiModels = ['gemini-3.1-flash-image', 'gemini-2.5-flash-image', 'gemini-3.5-flash', 'gemini-2.5-flash', 'gemini-2.5-pro', 'gemini-3-flash-preview', 'gemini-3-pro-preview', 'gemini-2.0-flash']
@@ -366,7 +369,7 @@ watch(
   async ([newVal]) => {
     if (newVal && props.account) {
       testPrompt.value = ''
-      testMode.value = 'default'
+      testMode.value = props.initialMode ?? 'default'
       resetState()
       await loadAvailableModels()
     } else {

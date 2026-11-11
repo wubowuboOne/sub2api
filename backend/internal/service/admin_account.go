@@ -396,6 +396,9 @@ func normalizeOpenAILongContextBillingExtra(platform string, extra map[string]an
 	if platform != PlatformOpenAI {
 		return extra, nil
 	}
+	if err := ValidateOpenAIWebSearchExtra(extra); err != nil {
+		return nil, err
+	}
 	if err := ValidateOpenAILongContextBillingExtra(platform, extra); err != nil {
 		return nil, err
 	}
@@ -773,6 +776,7 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 		delete(normalizedExtra, grokObservedModelsExtraKey)
 		delete(normalizedExtra, UpstreamModelMetadataExtraKey)
 		delete(normalizedExtra, UpstreamModelSyncExtraKey)
+		delete(normalizedExtra, "openai_web_search_probe")
 		// 保留配额用量和专用服务受管字段，防止普通账号编辑意外覆盖。
 		for _, key := range []string{
 			"quota_used",
@@ -784,6 +788,7 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 			grokObservedModelsExtraKey,
 			UpstreamModelMetadataExtraKey,
 			UpstreamModelSyncExtraKey,
+			"openai_web_search_probe",
 			UpstreamBillingProbeEnabledExtraKey,
 			UpstreamBillingRateSyncEnabledExtraKey,
 			UpstreamBillingProbeExtraKey,
@@ -1088,10 +1093,18 @@ func (s *adminServiceImpl) UpdateAccountExtra(ctx context.Context, id int64, upd
 	delete(updates, OllamaCloudUsageSnapshotExtraKey)
 	delete(updates, OpenCodeGoUsageAutoRefreshExtraKey)
 	delete(updates, OpenCodeGoUsageSnapshotExtraKey)
-	if _, exists := updates[openAILongContextBillingEnabledKey]; exists {
+	delete(updates, "openai_web_search_probe")
+	_, hasWebSearchMode := updates[OpenAIWebSearchModeKey]
+	_, hasLongContextBilling := updates[openAILongContextBillingEnabledKey]
+	if hasWebSearchMode || hasLongContextBilling {
 		account, err := s.accountRepo.GetByID(ctx, id)
 		if err != nil {
 			return err
+		}
+		if account.Platform == PlatformOpenAI {
+			if err := ValidateOpenAIWebSearchExtra(updates); err != nil {
+				return err
+			}
 		}
 		if err := ValidateOpenAILongContextBillingExtra(account.Platform, updates); err != nil {
 			return err

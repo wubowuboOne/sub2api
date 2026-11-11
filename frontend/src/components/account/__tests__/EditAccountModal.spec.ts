@@ -349,6 +349,21 @@ function mountModal(account = buildAccount(), renderGroupSelector = false) {
 }
 
 describe('EditAccountModal', () => {
+  it.each(['only', 'disabled'] as const)('saves standalone search mode %s without changing other account settings', async mode => {
+    const account = buildAccount()
+    account.extra = { unrelated: 'preserve' }
+    updateAccountMock.mockReset().mockResolvedValue(account)
+    const wrapper = mountModal(account)
+    await flushPromises()
+    const settings = wrapper.findComponent({ name: 'OpenAIWebSearchSettings' })
+    expect(settings.exists()).toBe(true)
+    settings.vm.$emit('update:modelValue', mode)
+    await wrapper.get('#edit-account-form').trigger('submit.prevent')
+    await flushPromises()
+    expect(updateAccountMock.mock.calls[0]?.[1]?.extra).toMatchObject({ unrelated: 'preserve', openai_web_search_mode: mode })
+    expect(updateAccountMock.mock.calls[0]?.[1]?.status).toBe(account.status)
+  })
+
   it.each(['active', 'error'])('omits unchanged OpenAI OAuth status %s from an unrelated edit', async (status) => {
     const account = { ...buildOpenAIOAuthParentAccount(), status }
     updateAccountMock.mockReset().mockResolvedValue(account)

@@ -156,6 +156,7 @@ func GroupFromServiceAdmin(g *service.Group) *AdminGroup {
 	out := &AdminGroup{
 		Group:                       groupFromServiceBase(g),
 		ForceOpenAIFast:             g.ForceOpenAIFast,
+		WebSearchAccountID:          g.WebSearchAccountID,
 		FreeOpenAIFast:              g.FreeOpenAIFast,
 		StreamOnly:                  g.StreamOnly,
 		CodexCLIOnly:                g.CodexCLIOnly,

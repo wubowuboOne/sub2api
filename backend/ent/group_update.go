@@ -673,6 +673,27 @@ func (_u *GroupUpdate) ClearVideoModelPrices() *GroupUpdate {
 	return _u
 }
 
+// SetWebSearchAccountID sets the "web_search_account_id" field.
+func (_u *GroupUpdate) SetWebSearchAccountID(v int64) *GroupUpdate {
+	_u.mutation.ResetWebSearchAccountID()
+	_u.mutation.SetWebSearchAccountID(v)
+	return _u
+}
+
+// SetNillableWebSearchAccountID sets the "web_search_account_id" field if the given value is not nil.
+func (_u *GroupUpdate) SetNillableWebSearchAccountID(v *int64) *GroupUpdate {
+	if v != nil {
+		_u.SetWebSearchAccountID(*v)
+	}
+	return _u
+}
+
+// AddWebSearchAccountID adds value to the "web_search_account_id" field.
+func (_u *GroupUpdate) AddWebSearchAccountID(v int64) *GroupUpdate {
+	_u.mutation.AddWebSearchAccountID(v)
+	return _u
+}
+
 // SetWebSearchPricePerCall sets the "web_search_price_per_call" field.
 func (_u *GroupUpdate) SetWebSearchPricePerCall(v float64) *GroupUpdate {
 	_u.mutation.ResetWebSearchPricePerCall()
@@ -1575,6 +1596,11 @@ func (_u *GroupUpdate) check() error {
 			return &ValidationError{Name: "subscription_type", err: fmt.Errorf(`ent: validator failed for field "Group.subscription_type": %w`, err)}
 		}
 	}
+	if v, ok := _u.mutation.WebSearchAccountID(); ok {
+		if err := group.WebSearchAccountIDValidator(v); err != nil {
+			return &ValidationError{Name: "web_search_account_id", err: fmt.Errorf(`ent: validator failed for field "Group.web_search_account_id": %w`, err)}
+		}
+	}
 	if v, ok := _u.mutation.SearchPricePer1k(); ok {
 		if err := group.SearchPricePer1kValidator(v); err != nil {
 			return &ValidationError{Name: "search_price_per_1k", err: fmt.Errorf(`ent: validator failed for field "Group.search_price_per_1k": %w`, err)}
@@ -1813,6 +1839,12 @@ func (_u *GroupUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	}
 	if _u.mutation.VideoModelPricesCleared() {
 		_spec.ClearField(group.FieldVideoModelPrices, field.TypeJSON)
+	}
+	if value, ok := _u.mutation.WebSearchAccountID(); ok {
+		_spec.SetField(group.FieldWebSearchAccountID, field.TypeInt64, value)
+	}
+	if value, ok := _u.mutation.AddedWebSearchAccountID(); ok {
+		_spec.AddField(group.FieldWebSearchAccountID, field.TypeInt64, value)
 	}
 	if value, ok := _u.mutation.WebSearchPricePerCall(); ok {
 		_spec.SetField(group.FieldWebSearchPricePerCall, field.TypeFloat64, value)
@@ -2944,6 +2976,27 @@ func (_u *GroupUpdateOne) ClearVideoModelPrices() *GroupUpdateOne {
 	return _u
 }
 
+// SetWebSearchAccountID sets the "web_search_account_id" field.
+func (_u *GroupUpdateOne) SetWebSearchAccountID(v int64) *GroupUpdateOne {
+	_u.mutation.ResetWebSearchAccountID()
+	_u.mutation.SetWebSearchAccountID(v)
+	return _u
+}
+
+// SetNillableWebSearchAccountID sets the "web_search_account_id" field if the given value is not nil.
+func (_u *GroupUpdateOne) SetNillableWebSearchAccountID(v *int64) *GroupUpdateOne {
+	if v != nil {
+		_u.SetWebSearchAccountID(*v)
+	}
+	return _u
+}
+
+// AddWebSearchAccountID adds value to the "web_search_account_id" field.
+func (_u *GroupUpdateOne) AddWebSearchAccountID(v int64) *GroupUpdateOne {
+	_u.mutation.AddWebSearchAccountID(v)
+	return _u
+}
+
 // SetWebSearchPricePerCall sets the "web_search_price_per_call" field.
 func (_u *GroupUpdateOne) SetWebSearchPricePerCall(v float64) *GroupUpdateOne {
 	_u.mutation.ResetWebSearchPricePerCall()
@@ -3859,6 +3912,11 @@ func (_u *GroupUpdateOne) check() error {
 			return &ValidationError{Name: "subscription_type", err: fmt.Errorf(`ent: validator failed for field "Group.subscription_type": %w`, err)}
 		}
 	}
+	if v, ok := _u.mutation.WebSearchAccountID(); ok {
+		if err := group.WebSearchAccountIDValidator(v); err != nil {
+			return &ValidationError{Name: "web_search_account_id", err: fmt.Errorf(`ent: validator failed for field "Group.web_search_account_id": %w`, err)}
+		}
+	}
 	if v, ok := _u.mutation.SearchPricePer1k(); ok {
 		if err := group.SearchPricePer1kValidator(v); err != nil {
 			return &ValidationError{Name: "search_price_per_1k", err: fmt.Errorf(`ent: validator failed for field "Group.search_price_per_1k": %w`, err)}
@@ -4114,6 +4172,12 @@ func (_u *GroupUpdateOne) sqlSave(ctx context.Context) (_node *Group, err error)
 	}
 	if _u.mutation.VideoModelPricesCleared() {
 		_spec.ClearField(group.FieldVideoModelPrices, field.TypeJSON)
+	}
+	if value, ok := _u.mutation.WebSearchAccountID(); ok {
+		_spec.SetField(group.FieldWebSearchAccountID, field.TypeInt64, value)
+	}
+	if value, ok := _u.mutation.AddedWebSearchAccountID(); ok {
+		_spec.AddField(group.FieldWebSearchAccountID, field.TypeInt64, value)
 	}
 	if value, ok := _u.mutation.WebSearchPricePerCall(); ok {
 		_spec.SetField(group.FieldWebSearchPricePerCall, field.TypeFloat64, value)

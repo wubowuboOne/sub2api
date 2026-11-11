@@ -2073,6 +2073,9 @@ func (a *Account) GetOpenAISessionID() string {
 }
 
 func (a *Account) SupportsOpenAIEndpointCapability(capability OpenAIEndpointCapability) bool {
+	if a == nil || !openAIWebSearchModeAllows(a, capability) {
+		return false
+	}
 	if a.HasManagedOpenAIConnections() && a.AuthConnectionID == "" {
 		return a.managedConnectionSupports(string(capability))
 	}

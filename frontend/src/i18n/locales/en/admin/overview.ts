@@ -1185,6 +1185,10 @@ export default {
         pricePlaceholder: 'optional'
       },
       webSearchPricing: {
+        account: 'Dedicated web search account',
+        accountDefault: 'Use existing scheduling',
+        accountHint: 'Only affects /v1/alpha/search. The account must belong to this group. If unavailable or retries are exhausted, search fails without switching to ordinary accounts.',
+        loadError: 'Could not load search accounts. Reopen settings or search again.',
         title: 'Codex Web Search Pricing',
         pricePerCall: 'Price per search call (USD)',
         pricePerCallHint:

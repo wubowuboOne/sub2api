@@ -1182,6 +1182,10 @@ export default {
         pricePlaceholder: '可选'
       },
       webSearchPricing: {
+        account: '专用网页搜索账号',
+        accountDefault: '不指定，使用现有调度',
+        accountHint: '只影响 /v1/alpha/search。指定账号需已加入本分组；不可用或重试耗尽时返回搜索失败，不切换至其他普通账号。',
+        loadError: '搜索账号加载失败，请重新打开设置或搜索重试',
         title: 'Codex 网页搜索计费',
         pricePerCall: '搜索单次价格（USD/次）',
         pricePerCallHint:

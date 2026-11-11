@@ -3640,6 +3640,8 @@
         </div>
       </div>
 
+      <OpenAIWebSearchSettings v-if="form.platform === 'openai'" v-model="openAIWebSearchMode" />
+
       <!-- Codex 指纹收敛模式（仅 OpenAI OAuth） -->
       <div
         v-if="form.platform === 'openai' && accountCategory === 'oauth-based'"
@@ -4285,6 +4287,8 @@ import { readChannelBindings, bindChannelAccounts } from '@/api/admin/upstreamCh
 import type { CodexSessionImportRequest as UpstreamImportRequest, OpenAICodexPATCreateRequest as UpstreamPATRequest } from '@/types'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import Select from '@/components/common/Select.vue'
+import OpenAIWebSearchSettings from './OpenAIWebSearchSettings.vue'
+import { applyOpenAIWebSearchMode, type OpenAIWebSearchMode } from './openaiWebSearch'
 import HelpTooltip from '@/components/common/HelpTooltip.vue'
 import UpstreamRequestIdHeaderField from '@/components/account/UpstreamRequestIdHeaderField.vue'
 import PlatformIcon from '@/components/common/PlatformIcon.vue'
@@ -4907,6 +4911,7 @@ watch(anthropicStripClaudeCodeIdentityEnabled, (enabled) => {
 })
 const anthropicAPIKeyAuthScheme = ref<AnthropicAPIKeyAuthScheme>('x_api_key')
 const webSearchEmulationMode = ref('default')
+const openAIWebSearchMode = ref<OpenAIWebSearchMode>('default')
 const webSearchGlobalEnabled = ref(false)
 
 const toggleOpenAILongContextBilling = () => {
@@ -5919,6 +5924,7 @@ const resetForm = () => {
   openAILongContextBillingTouched.value = false
   openAIResponseTierBillingEnabled.value = false
   openAICompactMode.value = 'auto'
+  openAIWebSearchMode.value = 'default'
   openAIResponsesMode.value = 'auto'
   openAIEndpointCapabilities.value = ['chat_completions', 'embeddings']
   openaiOAuthResponsesWebSocketV2Mode.value = OPENAI_WS_MODE_OFF
@@ -6068,6 +6074,7 @@ const buildOpenAIExtra = (base?: Record<string, unknown>): Record<string, unknow
   } else {
     delete extra.codex_fingerprint_mode
   }
+  applyOpenAIWebSearchMode(extra, openAIWebSearchMode.value)
   if (openAICompactMode.value !== 'auto') {
     extra.openai_compact_mode = openAICompactMode.value
   } else {

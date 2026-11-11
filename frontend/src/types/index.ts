@@ -658,6 +658,7 @@ export interface Group {
 }
 
 export interface AdminGroup extends Group {
+  web_search_account_id?: number
   // 管理端的 name / description 始终是原字段，各语言译文另放在 i18n 里
   i18n?: GroupI18n
   force_openai_fast: boolean
@@ -919,6 +920,7 @@ export interface CreateGroupRequest {
 }
 
 export interface UpdateGroupRequest {
+  web_search_account_id?: number
   name?: string
   description?: string | null
   i18n?: GroupI18n

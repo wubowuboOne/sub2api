@@ -225,6 +225,11 @@ func VideoPrice1080p(v float64) predicate.Group {
 	return predicate.Group(sql.FieldEQ(FieldVideoPrice1080p, v))
 }
 
+// WebSearchAccountID applies equality check predicate on the "web_search_account_id" field. It's identical to WebSearchAccountIDEQ.
+func WebSearchAccountID(v int64) predicate.Group {
+	return predicate.Group(sql.FieldEQ(FieldWebSearchAccountID, v))
+}
+
 // WebSearchPricePerCall applies equality check predicate on the "web_search_price_per_call" field. It's identical to WebSearchPricePerCallEQ.
 func WebSearchPricePerCall(v float64) predicate.Group {
 	return predicate.Group(sql.FieldEQ(FieldWebSearchPricePerCall, v))
@@ -1843,6 +1848,46 @@ func VideoModelPricesIsNil() predicate.Group {
 // VideoModelPricesNotNil applies the NotNil predicate on the "video_model_prices" field.
 func VideoModelPricesNotNil() predicate.Group {
 	return predicate.Group(sql.FieldNotNull(FieldVideoModelPrices))
+}
+
+// WebSearchAccountIDEQ applies the EQ predicate on the "web_search_account_id" field.
+func WebSearchAccountIDEQ(v int64) predicate.Group {
+	return predicate.Group(sql.FieldEQ(FieldWebSearchAccountID, v))
+}
+
+// WebSearchAccountIDNEQ applies the NEQ predicate on the "web_search_account_id" field.
+func WebSearchAccountIDNEQ(v int64) predicate.Group {
+	return predicate.Group(sql.FieldNEQ(FieldWebSearchAccountID, v))
+}
+
+// WebSearchAccountIDIn applies the In predicate on the "web_search_account_id" field.
+func WebSearchAccountIDIn(vs ...int64) predicate.Group {
+	return predicate.Group(sql.FieldIn(FieldWebSearchAccountID, vs...))
+}
+
+// WebSearchAccountIDNotIn applies the NotIn predicate on the "web_search_account_id" field.
+func WebSearchAccountIDNotIn(vs ...int64) predicate.Group {
+	return predicate.Group(sql.FieldNotIn(FieldWebSearchAccountID, vs...))
+}
+
+// WebSearchAccountIDGT applies the GT predicate on the "web_search_account_id" field.
+func WebSearchAccountIDGT(v int64) predicate.Group {
+	return predicate.Group(sql.FieldGT(FieldWebSearchAccountID, v))
+}
+
+// WebSearchAccountIDGTE applies the GTE predicate on the "web_search_account_id" field.
+func WebSearchAccountIDGTE(v int64) predicate.Group {
+	return predicate.Group(sql.FieldGTE(FieldWebSearchAccountID, v))
+}
+
+// WebSearchAccountIDLT applies the LT predicate on the "web_search_account_id" field.
+func WebSearchAccountIDLT(v int64) predicate.Group {
+	return predicate.Group(sql.FieldLT(FieldWebSearchAccountID, v))
+}
+
+// WebSearchAccountIDLTE applies the LTE predicate on the "web_search_account_id" field.
+func WebSearchAccountIDLTE(v int64) predicate.Group {
+	return predicate.Group(sql.FieldLTE(FieldWebSearchAccountID, v))
 }
 
 // WebSearchPricePerCallEQ applies the EQ predicate on the "web_search_price_per_call" field.

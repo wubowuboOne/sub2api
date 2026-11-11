@@ -3014,6 +3014,8 @@
         </div>
       </div>
 
+      <OpenAIWebSearchSettings v-if="account?.platform === 'openai'" v-model="openAIWebSearchMode" :account="account" />
+
       <!-- Codex 指纹收敛模式（仅 OpenAI OAuth） -->
       <div
         v-if="account?.platform === 'openai' && account?.type === 'oauth'"
@@ -3749,6 +3751,8 @@ import BaseDialog from '@/components/common/BaseDialog.vue'
 import AccountUpstreamChannelBinding from './AccountUpstreamChannelBinding.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import Select from '@/components/common/Select.vue'
+import OpenAIWebSearchSettings from './OpenAIWebSearchSettings.vue'
+import { readOpenAIWebSearchMode, applyOpenAIWebSearchMode, type OpenAIWebSearchMode } from './openaiWebSearch'
 import HelpTooltip from '@/components/common/HelpTooltip.vue'
 import UpstreamRequestIdHeaderField from '@/components/account/UpstreamRequestIdHeaderField.vue'
 import Toggle from '@/components/common/Toggle.vue'
@@ -4628,6 +4632,7 @@ watch(anthropicStripClaudeCodeIdentityEnabled, (enabled) => {
 })
 const anthropicAPIKeyAuthScheme = ref<AnthropicAPIKeyAuthScheme>('x_api_key')
 const webSearchEmulationMode = ref('default')
+const openAIWebSearchMode = ref<OpenAIWebSearchMode>('default')
 const webSearchGlobalEnabled = ref(false)
 const {
   globalEnabled: quotaNotifyGlobalEnabled,
@@ -5203,6 +5208,7 @@ const syncFormFromAccount = (newAccount: Account | null) => {
     editPlanType.value = newAccount.type === 'oauth'
       ? readPlanType(newAccount.credentials as Record<string, unknown> | undefined)
       : ''
+    openAIWebSearchMode.value = readOpenAIWebSearchMode(extra)
     openAICompactMode.value = (extra?.openai_compact_mode as OpenAICompactMode) || 'auto'
     if (newAccount.type === 'apikey') {
       openAIResponsesMode.value = normalizeOpenAIResponsesMode(extra?.openai_responses_mode)
@@ -6933,6 +6939,7 @@ const handleSubmit = async () => {
       } else {
         delete newExtra.openai_response_tier_billing_enabled
       }
+      applyOpenAIWebSearchMode(newExtra, openAIWebSearchMode.value)
       if (openAICompactMode.value === 'auto') {
         delete newExtra.openai_compact_mode
       } else {

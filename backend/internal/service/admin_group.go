@@ -407,6 +407,9 @@ func (s *adminServiceImpl) CreateGroup(ctx context.Context, input *CreateGroupIn
 	}
 
 	platform := NormalizeGroupPlatform(input.Platform)
+	if input.WebSearchAccountID != 0 {
+		return nil, infraerrors.BadRequest("INVALID_WEB_SEARCH_ACCOUNT", "configure the dedicated search account after creating the group and binding its accounts")
+	}
 	// 固定账号 manifest 配置：账号绑定发生在创建之后，创建时无法校验成员关系，
 	// 拒绝开启并在创建后的编辑里配置。
 	if normalizeCodexModelsManifestConfig(platform, input.CodexModelsManifestConfig).Enabled {
@@ -1042,6 +1045,17 @@ func (s *adminServiceImpl) UpdateGroup(ctx context.Context, id int64, input *Upd
 	}
 	if input.RequirePrivacySet != nil {
 		group.RequirePrivacySet = *input.RequirePrivacySet
+	}
+	if input.WebSearchAccountID != nil {
+		if *input.WebSearchAccountID != group.WebSearchAccountID {
+			if err := s.validateGroupWebSearchAccount(ctx, group, *input.WebSearchAccountID); err != nil {
+				return nil, err
+			}
+		}
+		group.WebSearchAccountID = *input.WebSearchAccountID
+	}
+	if group.Platform != PlatformOpenAI && group.Platform != PlatformComposite {
+		group.WebSearchAccountID = 0
 	}
 	if input.DefaultMappedModel != nil {
 		group.DefaultMappedModel = *input.DefaultMappedModel

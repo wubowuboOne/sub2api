@@ -510,6 +510,20 @@ func (_c *GroupCreate) SetVideoModelPrices(v map[string]map[string]float64) *Gro
 	return _c
 }
 
+// SetWebSearchAccountID sets the "web_search_account_id" field.
+func (_c *GroupCreate) SetWebSearchAccountID(v int64) *GroupCreate {
+	_c.mutation.SetWebSearchAccountID(v)
+	return _c
+}
+
+// SetNillableWebSearchAccountID sets the "web_search_account_id" field if the given value is not nil.
+func (_c *GroupCreate) SetNillableWebSearchAccountID(v *int64) *GroupCreate {
+	if v != nil {
+		_c.SetWebSearchAccountID(*v)
+	}
+	return _c
+}
+
 // SetWebSearchPricePerCall sets the "web_search_price_per_call" field.
 func (_c *GroupCreate) SetWebSearchPricePerCall(v float64) *GroupCreate {
 	_c.mutation.SetWebSearchPricePerCall(v)
@@ -1189,6 +1203,10 @@ func (_c *GroupCreate) defaults() error {
 		v := group.DefaultVideoRateMultiplier
 		_c.mutation.SetVideoRateMultiplier(v)
 	}
+	if _, ok := _c.mutation.WebSearchAccountID(); !ok {
+		v := group.DefaultWebSearchAccountID
+		_c.mutation.SetWebSearchAccountID(v)
+	}
 	if _, ok := _c.mutation.LongContextPricingEnabled(); !ok {
 		v := group.DefaultLongContextPricingEnabled
 		_c.mutation.SetLongContextPricingEnabled(v)
@@ -1401,6 +1419,14 @@ func (_c *GroupCreate) check() error {
 	}
 	if _, ok := _c.mutation.VideoRateMultiplier(); !ok {
 		return &ValidationError{Name: "video_rate_multiplier", err: errors.New(`ent: missing required field "Group.video_rate_multiplier"`)}
+	}
+	if _, ok := _c.mutation.WebSearchAccountID(); !ok {
+		return &ValidationError{Name: "web_search_account_id", err: errors.New(`ent: missing required field "Group.web_search_account_id"`)}
+	}
+	if v, ok := _c.mutation.WebSearchAccountID(); ok {
+		if err := group.WebSearchAccountIDValidator(v); err != nil {
+			return &ValidationError{Name: "web_search_account_id", err: fmt.Errorf(`ent: validator failed for field "Group.web_search_account_id": %w`, err)}
+		}
 	}
 	if v, ok := _c.mutation.SearchPricePer1k(); ok {
 		if err := group.SearchPricePer1kValidator(v); err != nil {
@@ -1685,6 +1711,10 @@ func (_c *GroupCreate) createSpec() (*Group, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.VideoModelPrices(); ok {
 		_spec.SetField(group.FieldVideoModelPrices, field.TypeJSON, value)
 		_node.VideoModelPrices = value
+	}
+	if value, ok := _c.mutation.WebSearchAccountID(); ok {
+		_spec.SetField(group.FieldWebSearchAccountID, field.TypeInt64, value)
+		_node.WebSearchAccountID = value
 	}
 	if value, ok := _c.mutation.WebSearchPricePerCall(); ok {
 		_spec.SetField(group.FieldWebSearchPricePerCall, field.TypeFloat64, value)
@@ -2555,6 +2585,24 @@ func (u *GroupUpsert) UpdateVideoModelPrices() *GroupUpsert {
 // ClearVideoModelPrices clears the value of the "video_model_prices" field.
 func (u *GroupUpsert) ClearVideoModelPrices() *GroupUpsert {
 	u.SetNull(group.FieldVideoModelPrices)
+	return u
+}
+
+// SetWebSearchAccountID sets the "web_search_account_id" field.
+func (u *GroupUpsert) SetWebSearchAccountID(v int64) *GroupUpsert {
+	u.Set(group.FieldWebSearchAccountID, v)
+	return u
+}
+
+// UpdateWebSearchAccountID sets the "web_search_account_id" field to the value that was provided on create.
+func (u *GroupUpsert) UpdateWebSearchAccountID() *GroupUpsert {
+	u.SetExcluded(group.FieldWebSearchAccountID)
+	return u
+}
+
+// AddWebSearchAccountID adds v to the "web_search_account_id" field.
+func (u *GroupUpsert) AddWebSearchAccountID(v int64) *GroupUpsert {
+	u.Add(group.FieldWebSearchAccountID, v)
 	return u
 }
 
@@ -3815,6 +3863,27 @@ func (u *GroupUpsertOne) UpdateVideoModelPrices() *GroupUpsertOne {
 func (u *GroupUpsertOne) ClearVideoModelPrices() *GroupUpsertOne {
 	return u.Update(func(s *GroupUpsert) {
 		s.ClearVideoModelPrices()
+	})
+}
+
+// SetWebSearchAccountID sets the "web_search_account_id" field.
+func (u *GroupUpsertOne) SetWebSearchAccountID(v int64) *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.SetWebSearchAccountID(v)
+	})
+}
+
+// AddWebSearchAccountID adds v to the "web_search_account_id" field.
+func (u *GroupUpsertOne) AddWebSearchAccountID(v int64) *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.AddWebSearchAccountID(v)
+	})
+}
+
+// UpdateWebSearchAccountID sets the "web_search_account_id" field to the value that was provided on create.
+func (u *GroupUpsertOne) UpdateWebSearchAccountID() *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.UpdateWebSearchAccountID()
 	})
 }
 
@@ -5331,6 +5400,27 @@ func (u *GroupUpsertBulk) UpdateVideoModelPrices() *GroupUpsertBulk {
 func (u *GroupUpsertBulk) ClearVideoModelPrices() *GroupUpsertBulk {
 	return u.Update(func(s *GroupUpsert) {
 		s.ClearVideoModelPrices()
+	})
+}
+
+// SetWebSearchAccountID sets the "web_search_account_id" field.
+func (u *GroupUpsertBulk) SetWebSearchAccountID(v int64) *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.SetWebSearchAccountID(v)
+	})
+}
+
+// AddWebSearchAccountID adds v to the "web_search_account_id" field.
+func (u *GroupUpsertBulk) AddWebSearchAccountID(v int64) *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.AddWebSearchAccountID(v)
+	})
+}
+
+// UpdateWebSearchAccountID sets the "web_search_account_id" field to the value that was provided on create.
+func (u *GroupUpsertBulk) UpdateWebSearchAccountID() *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.UpdateWebSearchAccountID()
 	})
 }
 

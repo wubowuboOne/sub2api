@@ -19,6 +19,8 @@ const (
 
 func normalizeAccountTestMode(mode string) string {
 	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case AccountTestModeWebSearch:
+		return AccountTestModeWebSearch
 	case AccountTestModeCompact:
 		return AccountTestModeCompact
 	case AccountTestModeBPSTools:

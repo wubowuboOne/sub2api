@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { AdminGroup, CodexModelsManifestConfig } from "@/types";
 import GroupsView from "@/views/admin/GroupsView.vue";
+import GroupWebSearchAccountField from "@/components/common/GroupWebSearchAccountField.vue";
 
 const {
   listGroups,
@@ -12,12 +13,14 @@ const {
   getUsageSummary,
   getCapacitySummary,
   getLiveCapability,
+  updateGroup,
 } = vi.hoisted(() => ({
   listGroups: vi.fn(),
   getModelAllowlistCandidates: vi.fn(),
   getUsageSummary: vi.fn(),
   getCapacitySummary: vi.fn(),
   getLiveCapability: vi.fn(),
+  updateGroup: vi.fn(),
 }));
 
 vi.mock("@/api/admin", () => ({
@@ -30,14 +33,14 @@ vi.mock("@/api/admin", () => ({
       getCapacitySummary,
       getLiveCapability,
       create: vi.fn(),
-      update: vi.fn(),
+      update: updateGroup,
       delete: vi.fn(),
       duplicate: vi.fn(),
       updateSortOrder: vi.fn(),
     },
     accounts: {
-      list: vi.fn(),
-      getById: vi.fn(),
+      list: vi.fn().mockResolvedValue({ items: [] }),
+      getById: vi.fn().mockResolvedValue(null),
     },
   },
 }));
@@ -99,6 +102,7 @@ const sourceGroup = {
   video_price_720p: null,
   video_price_1080p: null,
   web_search_price_per_call: null,
+  web_search_account_id: 7,
   search_price_per_1k: null,
   audio_realtime_price_per_min: null,
   audio_tts_price_per_million_chars: null,
@@ -220,7 +224,12 @@ const mountView = () =>
         GroupCapacityBadge: true,
         GroupRateMultipliersModal: true,
         GroupRPMOverridesModal: true,
-        ReasoningEffortPolicyFields: true,
+        ReasoningEffortPolicyFields: defineComponent({
+          setup(_, { expose }) {
+            expose({ validate: () => true });
+            return () => h("div");
+          },
+        }),
         CodexManifestAccountsField: CodexManifestAccountsFieldStub,
         PricingEntryCard: true,
         VueDraggable: true,
@@ -236,6 +245,7 @@ describe("GroupsView Codex manifest binding", () => {
     getUsageSummary.mockReset();
     getCapacitySummary.mockReset();
     getLiveCapability.mockReset();
+    updateGroup.mockReset().mockResolvedValue(sourceGroup);
 
     listGroups.mockResolvedValue({
       items: [sourceGroup],
@@ -248,6 +258,29 @@ describe("GroupsView Codex manifest binding", () => {
     getUsageSummary.mockResolvedValue([]);
     getCapacitySummary.mockResolvedValue([]);
     getLiveCapability.mockResolvedValue({ supported: false });
+  });
+
+  it("saves and clears the dedicated search binding without changing the model manifest", async () => {
+    const wrapper = mountView();
+    await flushPromises();
+    await wrapper.findAll("button").find(button => button.text().includes("common.edit"))!.trigger("click");
+    await flushPromises();
+    const searchField = wrapper.findComponent(GroupWebSearchAccountField);
+    expect(searchField.props()).toMatchObject({ modelValue: 7, groupId: 42 });
+    searchField.vm.$emit("update:modelValue", 17);
+    await wrapper.get("#edit-group-form").trigger("submit");
+    await flushPromises();
+    expect(updateGroup).toHaveBeenLastCalledWith(42, expect.objectContaining({
+      web_search_account_id: 17,
+      codex_models_manifest_config: sourceGroup.codex_models_manifest_config,
+    }));
+    await wrapper.findAll("button").find(button => button.text().includes("common.edit"))!.trigger("click");
+    await flushPromises();
+    wrapper.findComponent(GroupWebSearchAccountField).vm.$emit("update:modelValue", 0);
+    await wrapper.get("#edit-group-form").trigger("submit");
+    await flushPromises();
+    expect(updateGroup).toHaveBeenLastCalledWith(42, expect.objectContaining({ web_search_account_id: 0 }));
+    wrapper.unmount();
   });
 
   it("preserves consecutive child updates on the reactive edit config", async () => {

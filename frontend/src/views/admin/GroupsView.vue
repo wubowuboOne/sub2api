@@ -3259,6 +3259,13 @@
           </div>
         </div>
 
+        <GroupWebSearchAccountField
+          v-if="editingGroup && (editForm.platform === 'openai' || editForm.platform === 'composite')"
+          v-model="editForm.web_search_account_id"
+          :group-id="editingGroup.id"
+          class="border-t border-gray-200 dark:border-dark-400 pt-4 mt-4"
+        />
+
         <!-- 固定账号获取 Codex Model Manifest（仅 openai 平台，仅编辑对话框） -->
         <CodexManifestAccountsField
           v-if="editForm.platform === 'openai' && editingGroup"
@@ -4450,6 +4457,7 @@ import BaseDialog from "@/components/common/BaseDialog.vue";
 import ConfirmDialog from "@/components/common/ConfirmDialog.vue";
 import EmptyState from "@/components/common/EmptyState.vue";
 import Select from "@/components/common/Select.vue";
+import GroupWebSearchAccountField from "@/components/common/GroupWebSearchAccountField.vue";
 import PlatformIcon from "@/components/common/PlatformIcon.vue";
 import { platformLabel } from "@/utils/platformColors";
 import Icon from "@/components/icons/Icon.vue";
@@ -5471,6 +5479,7 @@ const convertApiFormatToRoutingRules = async (
 };
 
 const editForm = reactive({
+  web_search_account_id: 0,
   name: "",
   description: "",
   i18n: {} as GroupI18n,
@@ -6281,6 +6290,7 @@ const handleEdit = async (group: AdminGroup) => {
     group.video_model_prices,
   );
   editForm.web_search_price_per_call = group.web_search_price_per_call ?? null;
+  editForm.web_search_account_id = group.web_search_account_id ?? 0;
   editForm.search_price_per_1k = group.search_price_per_1k ?? null;
   editForm.audio_realtime_price_per_min = group.audio_realtime_price_per_min ?? null;
   editForm.audio_tts_price_per_million_chars = group.audio_tts_price_per_million_chars ?? null;
@@ -6399,6 +6409,7 @@ const closeEditModal = () => {
   editForm.free_openai_fast = false;
   editForm.model_pricing = [];
   editForm.web_search_price_per_call = null;
+  editForm.web_search_account_id = 0;
   editForm.search_price_per_1k = null;
   editForm.audio_realtime_price_per_min = null;
   editForm.audio_tts_price_per_million_chars = null;

@@ -162,6 +162,7 @@ func (Group) Fields() []ent.Field {
 			Optional().
 			SchemaType(map[string]string{dialect.Postgres: "jsonb"}).
 			Comment("按模型族和分辨率覆盖视频每秒价格"),
+		field.Int64("web_search_account_id").Default(0).Min(0),
 		field.Float("web_search_price_per_call").
 			Optional().
 			Nillable().

@@ -917,6 +917,9 @@ func (s *AccountTestService) testOpenAIAccountConnection(c *gin.Context, account
 	recordQualityBatchRoute(c, account, modelID, "openai:account")
 	ctx := c.Request.Context()
 	mode = normalizeAccountTestMode(mode)
+	if mode == AccountTestModeWebSearch {
+		return s.testOpenAIWebSearchConnection(c, account, modelID, prompt)
+	}
 	if account.IsExcelOAuth() {
 		model := strings.TrimSpace(modelID)
 		if model == "" {

@@ -22559,6 +22559,8 @@ type GroupMutation struct {
 	video_price_1080p                       *float64
 	addvideo_price_1080p                    *float64
 	video_model_prices                      *map[string]map[string]float64
+	web_search_account_id                   *int64
+	addweb_search_account_id                *int64
 	web_search_price_per_call               *float64
 	addweb_search_price_per_call            *float64
 	search_price_per_1k                     *float64
@@ -24522,6 +24524,62 @@ func (m *GroupMutation) VideoModelPricesCleared() bool {
 func (m *GroupMutation) ResetVideoModelPrices() {
 	m.video_model_prices = nil
 	delete(m.clearedFields, group.FieldVideoModelPrices)
+}
+
+// SetWebSearchAccountID sets the "web_search_account_id" field.
+func (m *GroupMutation) SetWebSearchAccountID(i int64) {
+	m.web_search_account_id = &i
+	m.addweb_search_account_id = nil
+}
+
+// WebSearchAccountID returns the value of the "web_search_account_id" field in the mutation.
+func (m *GroupMutation) WebSearchAccountID() (r int64, exists bool) {
+	v := m.web_search_account_id
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldWebSearchAccountID returns the old "web_search_account_id" field's value of the Group entity.
+// If the Group object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *GroupMutation) OldWebSearchAccountID(ctx context.Context) (v int64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldWebSearchAccountID is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldWebSearchAccountID requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldWebSearchAccountID: %w", err)
+	}
+	return oldValue.WebSearchAccountID, nil
+}
+
+// AddWebSearchAccountID adds i to the "web_search_account_id" field.
+func (m *GroupMutation) AddWebSearchAccountID(i int64) {
+	if m.addweb_search_account_id != nil {
+		*m.addweb_search_account_id += i
+	} else {
+		m.addweb_search_account_id = &i
+	}
+}
+
+// AddedWebSearchAccountID returns the value that was added to the "web_search_account_id" field in this mutation.
+func (m *GroupMutation) AddedWebSearchAccountID() (r int64, exists bool) {
+	v := m.addweb_search_account_id
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetWebSearchAccountID resets all changes to the "web_search_account_id" field.
+func (m *GroupMutation) ResetWebSearchAccountID() {
+	m.web_search_account_id = nil
+	m.addweb_search_account_id = nil
 }
 
 // SetWebSearchPricePerCall sets the "web_search_price_per_call" field.
@@ -26532,7 +26590,7 @@ func (m *GroupMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *GroupMutation) Fields() []string {
-	fields := make([]string, 0, 71)
+	fields := make([]string, 0, 72)
 	if m.created_at != nil {
 		fields = append(fields, group.FieldCreatedAt)
 	}
@@ -26640,6 +26698,9 @@ func (m *GroupMutation) Fields() []string {
 	}
 	if m.video_model_prices != nil {
 		fields = append(fields, group.FieldVideoModelPrices)
+	}
+	if m.web_search_account_id != nil {
+		fields = append(fields, group.FieldWebSearchAccountID)
 	}
 	if m.web_search_price_per_call != nil {
 		fields = append(fields, group.FieldWebSearchPricePerCall)
@@ -26826,6 +26887,8 @@ func (m *GroupMutation) Field(name string) (ent.Value, bool) {
 		return m.VideoPrice1080p()
 	case group.FieldVideoModelPrices:
 		return m.VideoModelPrices()
+	case group.FieldWebSearchAccountID:
+		return m.WebSearchAccountID()
 	case group.FieldWebSearchPricePerCall:
 		return m.WebSearchPricePerCall()
 	case group.FieldSearchPricePer1k:
@@ -26977,6 +27040,8 @@ func (m *GroupMutation) OldField(ctx context.Context, name string) (ent.Value, e
 		return m.OldVideoPrice1080p(ctx)
 	case group.FieldVideoModelPrices:
 		return m.OldVideoModelPrices(ctx)
+	case group.FieldWebSearchAccountID:
+		return m.OldWebSearchAccountID(ctx)
 	case group.FieldWebSearchPricePerCall:
 		return m.OldWebSearchPricePerCall(ctx)
 	case group.FieldSearchPricePer1k:
@@ -27308,6 +27373,13 @@ func (m *GroupMutation) SetField(name string, value ent.Value) error {
 		}
 		m.SetVideoModelPrices(v)
 		return nil
+	case group.FieldWebSearchAccountID:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetWebSearchAccountID(v)
+		return nil
 	case group.FieldWebSearchPricePerCall:
 		v, ok := value.(float64)
 		if !ok {
@@ -27609,6 +27681,9 @@ func (m *GroupMutation) AddedFields() []string {
 	if m.addvideo_price_1080p != nil {
 		fields = append(fields, group.FieldVideoPrice1080p)
 	}
+	if m.addweb_search_account_id != nil {
+		fields = append(fields, group.FieldWebSearchAccountID)
+	}
 	if m.addweb_search_price_per_call != nil {
 		fields = append(fields, group.FieldWebSearchPricePerCall)
 	}
@@ -27682,6 +27757,8 @@ func (m *GroupMutation) AddedField(name string) (ent.Value, bool) {
 		return m.AddedVideoPrice720p()
 	case group.FieldVideoPrice1080p:
 		return m.AddedVideoPrice1080p()
+	case group.FieldWebSearchAccountID:
+		return m.AddedWebSearchAccountID()
 	case group.FieldWebSearchPricePerCall:
 		return m.AddedWebSearchPricePerCall()
 	case group.FieldSearchPricePer1k:
@@ -27824,6 +27901,13 @@ func (m *GroupMutation) AddField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.AddVideoPrice1080p(v)
+		return nil
+	case group.FieldWebSearchAccountID:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddWebSearchAccountID(v)
 		return nil
 	case group.FieldWebSearchPricePerCall:
 		v, ok := value.(float64)
@@ -28171,6 +28255,9 @@ func (m *GroupMutation) ResetField(name string) error {
 		return nil
 	case group.FieldVideoModelPrices:
 		m.ResetVideoModelPrices()
+		return nil
+	case group.FieldWebSearchAccountID:
+		m.ResetWebSearchAccountID()
 		return nil
 	case group.FieldWebSearchPricePerCall:
 		m.ResetWebSearchPricePerCall()

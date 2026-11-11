@@ -1408,6 +1408,7 @@ func filterSchedulerExtra(extra map[string]any) map[string]any {
 	}
 	keys := []string{
 		service.OAuthDegradationActionExtraKey,
+		service.OpenAIWebSearchModeKey, "openai_web_search_probe",
 		// Images candidate authorization runs before full-account hydration.
 		service.ExtraImageModelsKey,
 		service.ExtraImageModelPrefixesKey,

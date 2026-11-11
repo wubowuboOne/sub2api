@@ -40,6 +40,9 @@ func openAIConnectionCapabilityFromContext(ctx context.Context) (string, bool) {
 // Responses-family requirement it applies the same connection predicate as
 // prepareAuthConnection; every other account and capability is unchanged.
 func (a *Account) supportsOpenAIEndpointCapabilityForRequest(ctx context.Context, capability OpenAIEndpointCapability) bool {
+	if !openAIWebSearchAllowedForRequest(ctx, a, capability) {
+		return false
+	}
 	if a.HasManagedOpenAIConnections() && a.AuthConnectionID == "" {
 		switch capability {
 		case OpenAIEndpointCapabilityChatCompletions, OpenAIEndpointCapabilityResponses, OpenAIEndpointCapabilityResponsesCompact:
