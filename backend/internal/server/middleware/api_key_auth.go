@@ -258,7 +258,7 @@ func apiKeyAuthWithSubscription(apiKeyService *service.APIKeyService, subscripti
 			)
 			if subErr != nil {
 				if !skipBilling {
-					AbortWithError(c, 403, "SUBSCRIPTION_NOT_FOUND", "No active subscription found for this group")
+					AbortWithError(c, 403, "SUBSCRIPTION_NOT_FOUND", service.NoActiveSubscriptionMessage)
 					return
 				}
 				// skipBilling: 订阅不存在也放行，handler 会返回可用的数据
@@ -311,7 +311,11 @@ func apiKeyAuthWithSubscription(apiKeyService *service.APIKeyService, subscripti
 						code = "USAGE_LIMIT_EXCEEDED"
 						status = 429
 					}
-					AbortWithError(c, status, code, validateErr.Error())
+					message := validateErr.Error()
+					if errors.Is(validateErr, service.ErrSubscriptionExpired) {
+						message = service.ErrSubscriptionExpired.Message
+					}
+					AbortWithError(c, status, code, message)
 					return
 				}
 			} else {

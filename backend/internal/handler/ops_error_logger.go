@@ -2248,7 +2248,10 @@ func normalizeOpsErrorType(errType string, code string) string {
 // Normalize only an explicitly local user-balance rejection. Upstream errors
 // retain their provider attribution even if they use the same message.
 func normalizeOpsLocalBalanceType(errType, message, phase, owner string) string {
-	if owner == "client" && phase == "request" && strings.EqualFold(strings.TrimSpace(message), service.InsufficientUserBalanceMessage) {
+	message = strings.TrimSpace(message)
+	if owner == "client" && phase == "request" &&
+		(strings.EqualFold(message, service.InsufficientUserBalanceMessage) ||
+			strings.EqualFold(message, service.InsufficientUserBalanceMessageEnglish)) {
 		return "billing_error"
 	}
 	return errType

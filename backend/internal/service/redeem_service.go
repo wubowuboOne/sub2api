@@ -15,7 +15,10 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
 )
 
-const InsufficientUserBalanceMessage = "Insufficient user balance. Please top up your user balance."
+const (
+	InsufficientUserBalanceMessageEnglish = "Insufficient user balance. Please top up your user balance."
+	InsufficientUserBalanceMessage        = "用户余额不足，请充值用户余额后重试。 " + InsufficientUserBalanceMessageEnglish
+)
 
 var (
 	ErrRedeemCodeNotFound  = infraerrors.NotFound("REDEEM_CODE_NOT_FOUND", "redeem code not found")

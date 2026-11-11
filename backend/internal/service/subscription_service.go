@@ -25,6 +25,8 @@ var MaxExpiresAt = time.Date(2099, 12, 31, 23, 59, 59, 0, time.UTC)
 // MaxValidityDays is the maximum allowed validity days for subscriptions (100 years)
 const MaxValidityDays = 36500
 
+const NoActiveSubscriptionMessage = "当前分组没有有效订阅（可能未开通、已到期或已停用），请开通或续费对应分组订阅；如有疑问，请联系管理员。 No active subscription found for this group."
+
 type SubscriptionRenewalMode string
 
 const (
@@ -45,7 +47,7 @@ func NormalizeSubscriptionRenewalMode(raw string) (SubscriptionRenewalMode, erro
 
 var (
 	ErrSubscriptionNotFound        = infraerrors.NotFound("SUBSCRIPTION_NOT_FOUND", "subscription not found")
-	ErrSubscriptionExpired         = infraerrors.Forbidden("SUBSCRIPTION_EXPIRED", "subscription has expired")
+	ErrSubscriptionExpired         = infraerrors.Forbidden("SUBSCRIPTION_EXPIRED", "订阅已到期，请续费后重试。 subscription has expired.")
 	ErrSubscriptionSuspended       = infraerrors.Forbidden("SUBSCRIPTION_SUSPENDED", "subscription is suspended")
 	ErrSubscriptionAlreadyExists   = infraerrors.Conflict("SUBSCRIPTION_ALREADY_EXISTS", "subscription already exists for this user and group")
 	ErrSubscriptionAssignConflict  = infraerrors.Conflict("SUBSCRIPTION_ASSIGN_CONFLICT", "subscription exists but request conflicts with existing assignment semantics")
