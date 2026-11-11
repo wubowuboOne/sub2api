@@ -326,8 +326,12 @@ func (s *OpenAIGatewayService) forwardPrismBrowser(ctx context.Context, c *gin.C
 		return nil, err
 	}
 	contentType := "application/json"
+	clientModel := openAIClientResponseModel(c, model)
 	if stream {
 		contentType = "text/event-stream"
+		responseBody = []byte(s.replaceModelInSSEBody(string(responseBody), upstreamModel, clientModel))
+	} else {
+		responseBody = rewriteOpenAIClientModel(responseBody, clientModel)
 	}
 	SetActualOpenAIUpstreamEndpoint(c, "/v1/responses")
 	c.Header("X-Prism-Usage", "unavailable")

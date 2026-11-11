@@ -1361,7 +1361,11 @@ func (s *OpenAIGatewayService) replaceModelInSSELine(line, _ string, toModel str
 	}
 	updated := data
 	// Only protocol model fields are rewritten; text and tool payloads are untouched.
-	for _, path := range []string{"model", "response.model"} {
+	paths := []string{"model", "response.model"}
+	if gjson.Get(data, "type").String() == "message_start" {
+		paths = append(paths, "message.model")
+	}
+	for _, path := range paths {
 		if m := gjson.Get(updated, path); m.Type == gjson.String && m.Str != toModel {
 			var err error
 			updated, err = sjson.Set(updated, path, toModel)

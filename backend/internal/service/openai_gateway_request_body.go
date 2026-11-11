@@ -1025,7 +1025,11 @@ func rewriteOpenAIClientModel(body []byte, toModel string) []byte {
 		return body
 	}
 	updated := body
-	for _, path := range []string{"model", "response.model"} {
+	paths := []string{"model", "response.model"}
+	if gjson.GetBytes(body, "type").String() == "message_start" {
+		paths = append(paths, "message.model")
+	}
+	for _, path := range paths {
 		if m := gjson.GetBytes(updated, path); m.Type == gjson.String && m.Str != toModel {
 			next, err := sjson.SetBytes(updated, path, toModel)
 			if err != nil {

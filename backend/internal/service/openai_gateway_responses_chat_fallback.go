@@ -216,7 +216,7 @@ func (s *OpenAIGatewayService) bufferChatCompletionsAsResponses(
 	if toolTextDecoder != nil && len(ccResp.Choices) > 0 {
 		toolTextErr = toolTextDecoder.RecoverMessage(&ccResp.Choices[0].Message, ccResp.Choices[0].FinishReason)
 	}
-	responsesResp := apicompat.ChatCompletionsResponseToResponses(ccResp, originalModel, customTools, functionTools, toolSearch, namespaceTools)
+	responsesResp := apicompat.ChatCompletionsResponseToResponses(ccResp, openAIClientResponseModel(c, originalModel), customTools, functionTools, toolSearch, namespaceTools)
 	if toolTextErr != nil {
 		responsesResp.Status = "failed"
 		responsesResp.IncompleteDetails = nil
@@ -307,7 +307,7 @@ func (s *OpenAIGatewayService) streamChatCompletionsAsResponses(
 	requestID := resp.Header.Get("x-request-id")
 	writeStreamHeaders := s.newStreamHeaderWriter(c, resp.Header)
 
-	state := apicompat.NewChatCompletionsToResponsesStreamState(originalModel)
+	state := apicompat.NewChatCompletionsToResponsesStreamState(openAIClientResponseModel(c, originalModel))
 	state.CustomTools = customTools
 	state.FunctionTools = functionTools
 	state.ToolSearchDeclared = toolSearch

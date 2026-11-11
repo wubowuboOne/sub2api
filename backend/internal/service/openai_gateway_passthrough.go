@@ -2850,11 +2850,12 @@ func (s *OpenAIGatewayService) handleNonStreamingResponsePassthrough(
 	if err != nil {
 		return nil, err
 	}
+	bodyLooksLikeSSE := bodyHasSSEFraming(body)
 	observer := upstreamResponseModelObserverFromContext(c)
 	if observer == nil {
 		observer = beginUpstreamResponseModelObservation(c)
 	}
-	if bodyHasSSEFraming(body) {
+	if bodyLooksLikeSSE {
 		observeOpenAISSEBody(observer, string(body))
 	} else {
 		observer.ObserveOpenAI(body, strings.TrimSpace(gjson.GetBytes(body, "type").String()))
@@ -2864,10 +2865,9 @@ func (s *OpenAIGatewayService) handleNonStreamingResponsePassthrough(
 	// Some upstreams (e.g. other sub2api instances) may return SSE even when
 	// stream=false was requested. Without this conversion the client would
 	// receive raw SSE text or a terminal event with empty output.
-	// Codex upstreams may omit Content-Type while still sending SSE. Include
-	// OpenAI SetupToken credentials and preserve legacy OAuth accounts whose
-	// platform is implicit (same rule as handleNonStreamingResponse).
-	if isEventStreamResponse(resp.Header) || (account != nil && (account.Type == AccountTypeOAuth || account.IsOpenAIOAuthLike()) && bodyHasSSEFraming(body)) {
+	// Compatible API-key upstreams can omit or mislabel Content-Type too. A
+	// valid JSON body always stays on the JSON path, even if its text says data:.
+	if isEventStreamResponse(resp.Header) || (bodyLooksLikeSSE && !gjson.ValidBytes(body)) {
 		return s.handlePassthroughSSEToJSON(resp, c, account, body, originalModel, mappedModel)
 	}
 

@@ -279,7 +279,7 @@ func (s *OpenAIGatewayService) handleResponsesBufferedFromNativeAnthropic(
 		finalResp.Model = upstreamModel
 	}
 	responsesResp := apicompat.AnthropicToResponsesResponse(finalResp)
-	responsesResp.Model = originalModel
+	responsesResp.Model = openAIClientResponseModel(c, originalModel)
 
 	if s.responseHeaderFilter != nil {
 		responseheaders.WriteFilteredHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
@@ -337,7 +337,7 @@ func (s *OpenAIGatewayService) handleResponsesStreamingFromNativeAnthropic(
 	c.Writer.WriteHeader(http.StatusOK)
 
 	state := apicompat.NewAnthropicEventToResponsesState()
-	state.Model = originalModel
+	state.Model = openAIClientResponseModel(c, originalModel)
 	state.PreserveThinkingSignatures = isClaude55SignedThinkingModel(upstreamModel)
 	clientToolRestorer := apicompat.NewResponsesClientToolStreamRestorer(clientToolMapping)
 

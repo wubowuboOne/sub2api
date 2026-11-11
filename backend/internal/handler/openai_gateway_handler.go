@@ -3722,6 +3722,7 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 				if model == "" {
 					model = reqModel
 				}
+				c.Request = c.Request.WithContext(context.WithValue(c.Request.Context(), ctxkey.RequestedPublicModel, model))
 				setOpsRequestContext(c, model, true)
 				bindOpenAIPriorityObservation(c, apiKey.GroupID, model)
 				routeModel := service.MapAPIKeyModel(apiKey, model)

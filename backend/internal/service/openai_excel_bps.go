@@ -819,6 +819,7 @@ func (s *OpenAIGatewayService) forwardExcelBPS(ctx context.Context, c *gin.Conte
 	// client effort for usage display, and the BPS-normalized effort for billing.
 	requestedEffort := coalesceRequestedReasoningEffort(RequestedReasoningEffortFromContext(ctx), &bridge.RequestedEffort)
 	result := &OpenAIForwardResult{Model: originalModel, UpstreamModel: model, UpstreamEndpoint: "/basispoints/api/responses", Stream: stream, ReasoningEffort: &bridge.Effort, RequestedReasoningEffort: requestedEffort, RequestID: resp.Header.Get("x-request-id")}
+	clientModel := openAIClientResponseModel(c, originalModel)
 	if stream {
 		c.Header("Content-Type", "text/event-stream")
 		c.Header("Cache-Control", "no-cache")
@@ -906,6 +907,7 @@ func (s *OpenAIGatewayService) forwardExcelBPS(ctx context.Context, c *gin.Conte
 			}
 		}
 		if stream {
+			line = s.replaceModelInSSELine(line, model, clientModel)
 			if _, err = c.Writer.WriteString(line + "\n"); err != nil {
 				result.ClientDisconnect = true
 				if isExcelBPSClientCancellation(c, c.Request.Context().Err()) {
@@ -969,7 +971,7 @@ func (s *OpenAIGatewayService) forwardExcelBPS(ctx context.Context, c *gin.Conte
 				c.JSON(http.StatusBadGateway, gin.H{"error": detail})
 			}
 		} else {
-			c.Data(200, "application/json", completed)
+			c.Data(200, "application/json", rewriteOpenAIClientModel(completed, clientModel))
 		}
 	}
 	if terminal != "response.completed" {

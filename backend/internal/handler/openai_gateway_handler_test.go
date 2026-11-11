@@ -2072,6 +2072,7 @@ type openAIResponsesWSUsageLogCase struct {
 	channelMapping            map[string]string
 	billingModelSource        string
 	accountModelMapping       map[string]any
+	apiKeyModelMapping        map[string]string
 	afterFirstUpstreamRequest func(channelSvc *service.ChannelService) error
 	// group 覆盖 apiKey.Group（分组级模型白名单测试用）；nil 保持原有无分组行为。
 	group *service.Group
@@ -3276,6 +3277,7 @@ func runOpenAIResponsesWebSocketUsageLogCase(t *testing.T, tc openAIResponsesWSU
 
 	apiKey := &service.APIKey{
 		AllowLongContext: true,
+		ModelMapping:     tc.apiKeyModelMapping,
 		ID:               1801,
 		UserID:           1701,
 		Key:              "synthetic-ws-auth-key",

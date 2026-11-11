@@ -13,10 +13,13 @@ import (
 
 var openAIClientQuotedModelReferences = regexp.MustCompile("(?i)(?:'[^'\\r\\n]+'|\"[^\"\\r\\n]+\"|`[^`\\r\\n]+`)\\s+model\\b|\\bmodel\\s+(?:'[^'\\r\\n]+'|\"[^\"\\r\\n]+\"|`[^`\\r\\n]+`)")
 
-// Ingress captures this before channel mapping rewrites the forwarding body.
+// Public model identity is captured before API-key, composite and channel mapping.
 // Use it only for wire responses, never for scheduling or usage attribution.
 func openAIClientResponseModel(c *gin.Context, fallback string) string {
 	if c != nil && c.Request != nil {
+		if model, ok := RequestedPublicModelFromContext(c.Request.Context()); ok {
+			return model
+		}
 		if model, ok := c.Request.Context().Value(ctxkey.Model).(string); ok && strings.TrimSpace(model) != "" {
 			return model
 		}
