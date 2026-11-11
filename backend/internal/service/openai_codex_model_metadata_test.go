@@ -477,8 +477,8 @@ func TestCompleteAPIKeyCodexManifestSearchCapabilityPreservesUpstreamAndFailsClo
 	require.Equal(t, true, models[1]["supports_search_tool"])
 }
 
-// Scenario: multiple schedulable accounts advertise only their shared capabilities.
-func TestBuildCodexModelsManifestForGroupIntersectsSyncedAccountMetadata(t *testing.T) {
+// Scenario: reasoning uses one account; remaining capabilities stay shared.
+func TestBuildCodexModelsManifestForGroupSelectsReasoningAndIntersectsOtherMetadata(t *testing.T) {
 	t.Parallel()
 
 	const groupID int64 = 736
@@ -514,13 +514,13 @@ func TestBuildCodexModelsManifestForGroupIntersectsSyncedAccountMetadata(t *test
 	require.NoError(t, err)
 	models := decodeCodexManifestModels(t, body)
 	require.Len(t, models, 1)
-	require.Equal(t, []string{"high"}, effortsFromManifestModel(t, models[0]))
-	require.Equal(t, "high", models[0]["default_reasoning_level"])
+	require.Equal(t, []string{"low", "high"}, effortsFromManifestModel(t, models[0]))
+	require.Equal(t, "low", models[0]["default_reasoning_level"])
 	require.Equal(t, []any{"text"}, models[0]["input_modalities"])
 	require.EqualValues(t, 128_000, models[0]["context_window"])
 }
 
-// Scenario: the same public alias may target different models on one platform when complete snapshots can be intersected.
+// Scenario: reasoning follows one mapped account while other capabilities intersect.
 func TestBuildCodexModelsManifestForGroupIntersectsDifferentMappedTargetsWithoutLeakingAlias(t *testing.T) {
 	t.Parallel()
 
@@ -576,7 +576,7 @@ func TestBuildCodexModelsManifestForGroupIntersectsDifferentMappedTargetsWithout
 		require.Equal(t, "my-coder", models[0]["slug"])
 		require.Equal(t, "my-coder", models[0]["display_name"])
 		require.Equal(t, "Custom model routed through Sub2API.", models[0]["description"])
-		require.Equal(t, []string{"low", "medium", "high"}, effortsFromManifestModel(t, models[0]))
+		require.Equal(t, []string{"low", "medium", "high", "xhigh"}, effortsFromManifestModel(t, models[0]))
 		require.Equal(t, []any{"text"}, models[0]["input_modalities"])
 		require.EqualValues(t, 272_000, models[0]["context_window"])
 	}
@@ -621,7 +621,7 @@ func TestBuildCodexModelsManifestForGroupIntersectsTransientlyUnschedulableMappe
 	require.Len(t, models, 1)
 	require.Equal(t, "my-coder", models[0]["slug"])
 	require.Equal(t, "my-coder", models[0]["display_name"])
-	require.Equal(t, []string{"low", "medium", "high"}, effortsFromManifestModel(t, models[0]))
+	require.Equal(t, []string{"low", "medium", "high", "xhigh"}, effortsFromManifestModel(t, models[0]))
 	require.Equal(t, []any{"text"}, models[0]["input_modalities"])
 	require.EqualValues(t, 272_000, models[0]["context_window"])
 }
@@ -736,7 +736,7 @@ func TestBuildCodexModelsManifestForGroupKeepsCrossPlatformAliasAmbiguityClosed(
 	require.Equal(t, []any{"text"}, models[0]["input_modalities"])
 }
 
-func TestBuildCodexModelsManifestForGroupDoesNotAdvertiseNoneWhenAccountReasoningConflicts(t *testing.T) {
+func TestBuildCodexModelsManifestForGroupUsesSelectedAccountWhenReasoningDiffers(t *testing.T) {
 	t.Parallel()
 
 	const groupID int64 = 738
@@ -775,9 +775,8 @@ func TestBuildCodexModelsManifestForGroupDoesNotAdvertiseNoneWhenAccountReasonin
 	require.NoError(t, err)
 	models := decodeCodexManifestModels(t, body)
 	require.Len(t, models, 1)
-	_, hasDefault := models[0]["default_reasoning_level"]
-	require.False(t, hasDefault)
-	require.Empty(t, models[0]["supported_reasoning_levels"])
+	require.Equal(t, "low", models[0]["default_reasoning_level"])
+	require.Equal(t, []string{"low", "high"}, effortsFromManifestModel(t, models[0]))
 }
 
 func TestAstraCodexToolCapabilitiesFollowAPIKeyAlias(t *testing.T) {
@@ -820,11 +819,8 @@ func TestAstraCodexToolCapabilitiesKeepAPIKeyResponsesLiteGuard(t *testing.T) {
 	require.Equal(t, false, decodeCodexManifestModels(t, body)[0]["use_responses_lite"])
 }
 
-// Scenario: an OpenAI group keeps a failover account whose mapping points the
-// shared public alias at a different upstream model. Without an explicit routing
-// rule the alias target is ambiguous and capabilities must fail closed; with one,
-// the operator has declared who serves the alias, so the reasoning slider and
-// image input must survive.
+// Scenario: reasoning follows one eligible mapped account, honoring per-model
+// routing when configured. Image input retains its independent account rules.
 func TestCodexAliasFailoverMappingHonorsModelRouting(t *testing.T) {
 	newAccount := func(id int64, target string, priority int) Account {
 		return Account{
@@ -868,10 +864,10 @@ func TestCodexAliasFailoverMappingHonorsModelRouting(t *testing.T) {
 		return efforts, model["default_reasoning_level"], model["input_modalities"]
 	}
 
-	t.Run("no routing rule still fails closed", func(t *testing.T) {
+	t.Run("no routing rule uses primary account", func(t *testing.T) {
 		levels, def, modalities := manifestFieldsOf(t, nil)
-		require.Empty(t, levels, "ambiguous alias target must not advertise reasoning levels")
-		require.Nil(t, def)
+		require.Equal(t, []string{"low", "medium", "high", "xhigh", "max", "ultra"}, levels)
+		require.Equal(t, "medium", def)
 		require.Equal(t, []any{"text", "image"}, modalities,
 			"image input is resolved per-account independently of routing rules")
 	})
@@ -893,7 +889,7 @@ func TestCodexAliasFailoverMappingHonorsModelRouting(t *testing.T) {
 		require.Contains(t, modalities, "image")
 	})
 
-	t.Run("routing disabled falls back to failing closed", func(t *testing.T) {
+	t.Run("routing disabled uses primary account", func(t *testing.T) {
 		group := &Group{
 			ID:                  2,
 			Platform:            PlatformOpenAI,
@@ -901,7 +897,7 @@ func TestCodexAliasFailoverMappingHonorsModelRouting(t *testing.T) {
 			ModelRouting:        map[string][]int64{"gpt-6-astra": {16, 1}},
 		}
 		levels, _, _ := manifestFieldsOf(t, group)
-		require.Empty(t, levels, "a disabled routing rule must not resolve the alias")
+		require.Equal(t, []string{"low", "medium", "high", "xhigh", "max", "ultra"}, levels)
 	})
 
 	t.Run("routing rule for another alias does not leak", func(t *testing.T) {
@@ -912,7 +908,22 @@ func TestCodexAliasFailoverMappingHonorsModelRouting(t *testing.T) {
 			ModelRouting:        map[string][]int64{"gpt-5.6-sol": {1}},
 		}
 		levels, _, _ := manifestFieldsOf(t, group)
-		require.Empty(t, levels, "unrelated routing rules must not resolve this alias")
+		require.Equal(t, []string{"low", "medium", "high", "xhigh", "max", "ultra"}, levels)
+	})
+
+	t.Run("routing can select only the secondary account", func(t *testing.T) {
+		group := &Group{
+			ID: 2, Platform: PlatformOpenAI, ModelRoutingEnabled: true,
+			ModelRouting: map[string][]int64{"gpt-6-astra": {1}},
+		}
+		levels, def, _ := manifestFieldsOf(t, group)
+		expected := newConfiguredCodexModelDescriptor("gpt-5.6-sol")
+		var expectedLevels []string
+		for _, level := range expected.SupportedReasoningLevels {
+			expectedLevels = append(expectedLevels, level.Effort)
+		}
+		require.Equal(t, expectedLevels, levels)
+		require.Equal(t, *expected.DefaultReasoningLevel, def)
 	})
 }
 

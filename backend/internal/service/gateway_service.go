@@ -1476,6 +1476,11 @@ func availableModelsFromAccounts(accounts []Account, groupID *int64, platform st
 		}
 		accounts = filtered
 	}
+	modelAccounts := openAIModelCatalogAccounts(accounts)
+	if len(accounts) > 0 && len(modelAccounts) == 0 {
+		return []string{}
+	}
+	accounts = modelAccounts
 
 	// Collect unique models from all accounts
 	modelSet := make(map[string]struct{})

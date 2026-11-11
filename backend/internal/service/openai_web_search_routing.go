@@ -66,6 +66,27 @@ func openAIWebSearchModeAllows(a *Account, capability OpenAIEndpointCapability) 
 	}
 }
 
+// Search-only accounts cannot serve model turns or contribute model capabilities.
+func openAIModelCatalogAccounts(accounts []Account) []Account {
+	var filtered []Account
+	for i := range accounts {
+		if accounts[i].GetOpenAIWebSearchMode() == OpenAIWebSearchModeOnly {
+			if filtered == nil {
+				filtered = make([]Account, 0, len(accounts))
+				filtered = append(filtered, accounts[:i]...)
+			}
+			continue
+		}
+		if filtered != nil {
+			filtered = append(filtered, accounts[i])
+		}
+	}
+	if filtered != nil {
+		return filtered
+	}
+	return accounts
+}
+
 func openAIWebSearchRouteFingerprint(a *Account) string {
 	if a == nil {
 		return ""

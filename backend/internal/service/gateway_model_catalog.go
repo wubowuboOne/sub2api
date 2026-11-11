@@ -20,6 +20,7 @@ func (s *GatewayService) GetGroupModelCatalog(ctx context.Context, groupID int64
 	if err != nil {
 		return nil, err
 	}
+	accounts = openAIModelCatalogAccounts(accounts)
 	platforms := []string{platform}
 	if platform == PlatformComposite {
 		platforms = domain.CompositePrecedencePlatformIDs()

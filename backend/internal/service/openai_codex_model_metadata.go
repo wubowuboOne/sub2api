@@ -204,6 +204,9 @@ func groupCodexModelMetadata(
 	publicAlias := upstreamModel != modelID
 	candidates := make([]UpstreamModelMetadata, 0)
 	missingMetadata := false
+	var reasoningAccount *Account
+	var reasoningModel string
+	var reasoningMetadata UpstreamModelMetadata
 	for i := range accounts {
 		account := &accounts[i]
 		if !codexAccountServesPlatformModel(account, platform, modelID) {
@@ -229,13 +232,14 @@ func groupCodexModelMetadata(
 		}
 		metadata, ok := account.GetUpstreamModelMetadata(lookupModel)
 		if !ok {
-			if explicitTargetsConflict {
-				return codexModelMetadataOverride{
-					reasoningConflict:       true,
-					inputModalitiesConflict: true,
-				}, true
-			}
 			missingMetadata = true
+		}
+		// Pick one ordinary OpenAI route, independent of repository row order.
+		if platform == PlatformOpenAI && (reasoningAccount == nil || account.Priority < reasoningAccount.Priority ||
+			(account.Priority == reasoningAccount.Priority && account.ID < reasoningAccount.ID)) {
+			reasoningAccount = account
+			reasoningModel = lookupModel
+			reasoningMetadata = metadata
 		}
 		metadata.CodexToolCapabilities = accountCodexToolCapabilities(account, lookupModel)
 		candidates = append(candidates, metadata)
@@ -245,15 +249,43 @@ func groupCodexModelMetadata(
 	}
 	metadata := intersectUpstreamModelMetadata(modelID, candidates)
 	if missingMetadata {
-		metadata = codexModelMetadataOverride{UpstreamModelMetadata: UpstreamModelMetadata{
-			CodexToolCapabilities: metadata.CodexToolCapabilities,
-		}}
+		if explicitTargetsConflict {
+			metadata = codexModelMetadataOverride{reasoningConflict: true, inputModalitiesConflict: true}
+		} else {
+			metadata = codexModelMetadataOverride{UpstreamModelMetadata: UpstreamModelMetadata{
+				CodexToolCapabilities: metadata.CodexToolCapabilities,
+			}}
+		}
+	}
+	if reasoningAccount != nil {
+		applyCodexAccountReasoningMetadata(&metadata, reasoningMetadata, reasoningModel)
 	}
 	if publicAlias {
 		metadata.DisplayName = modelID
 		metadata.Description = configuredCodexCustomDescription
 	}
 	return metadata, true
+}
+
+// Reasoning choices follow one serving account's mapped model. Other capabilities
+// retain the group intersection, including conservative missing-snapshot rules.
+func applyCodexAccountReasoningMetadata(metadata *codexModelMetadataOverride, accountMetadata UpstreamModelMetadata, modelID string) {
+	descriptor := newConfiguredCodexModelDescriptor(modelID)
+	applyUpstreamModelMetadataToCodexDescriptor(&descriptor, codexModelMetadataOverride{UpstreamModelMetadata: accountMetadata})
+	reasoning := true
+	if len(descriptor.SupportedReasoningLevels) == 1 && descriptor.SupportedReasoningLevels[0].Effort == "none" {
+		reasoning = false
+	}
+	metadata.reasoningConflict = false
+	metadata.Reasoning = &reasoning
+	metadata.SupportedReasoningLevels = make([]string, 0, len(descriptor.SupportedReasoningLevels))
+	for _, level := range descriptor.SupportedReasoningLevels {
+		metadata.SupportedReasoningLevels = append(metadata.SupportedReasoningLevels, level.Effort)
+	}
+	metadata.DefaultReasoningLevel = ""
+	if descriptor.DefaultReasoningLevel != nil {
+		metadata.DefaultReasoningLevel = *descriptor.DefaultReasoningLevel
+	}
 }
 
 func codexExplicitModelTargetsConflict(accounts []Account, modelID string) bool {

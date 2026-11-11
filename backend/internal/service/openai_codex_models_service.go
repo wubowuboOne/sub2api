@@ -248,6 +248,7 @@ func loadCodexGroupCatalogAccounts(ctx context.Context, repo AccountRepository, 
 	if err != nil {
 		return nil, nil, err
 	}
+	visible = openAIModelCatalogAccounts(visible)
 	catalog = visible
 	groupAccounts, listErr := repo.ListModelAvailabilityCandidates(
 		ctx,
@@ -270,7 +271,7 @@ func loadCodexGroupCatalogAccounts(ctx context.Context, repo AccountRepository, 
 	if listErr != nil {
 		return visible, catalog, nil
 	}
-	return visible, groupAccounts, nil
+	return visible, openAIModelCatalogAccounts(groupAccounts), nil
 }
 
 func openAIConfiguredCodexModelIDs(accounts []Account, groupID *int64) []string {
@@ -947,6 +948,7 @@ func buildCodexModelsManifestForAccounts(
 	compositeRoutes []CompositeModelRoute,
 	compositeRoutesAvailable bool,
 ) ([]byte, error) {
+	accounts = openAIModelCatalogAccounts(accounts)
 	if effectivePlatform == PlatformOpenAI {
 		modelIDs = filterRetiredOpenAIModelIDs(accounts, modelIDs)
 	} else if effectivePlatform == PlatformComposite {
