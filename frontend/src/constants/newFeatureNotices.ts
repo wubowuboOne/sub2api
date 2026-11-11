@@ -5,8 +5,10 @@
  */
 export const NEW_FEATURE_NOTICES = {
   oauthDegradationActions: 'oauth-degradation-actions-initial-announcement',
+  openaiAPIKeyFallback: 'openai-apikey-fallback-initial-announcement',
   dashboardAccountConcurrency: 'dashboard-account-concurrency-initial-announcement',
   qualityRetestRest: 'quality-retest-rest-initial-announcement',
+  qualityOAuth401Cleanup: 'quality-oauth-401-cleanup-initial-announcement',
   keyRisk: 'key-risk-notices-acknowledgement-initial-announcement',
   mistralBudgetUsage: 'mistral-budget-usage-initial-announcement',
   deepSeekSearch: 'deepseek-search-provider-initial-announcement',
@@ -36,4 +38,5 @@ export const NEW_FEATURE_NOTICES = {
   streamFirstEventTiming: 'stream-first-event-timing-initial-announcement',
   openaiImageHeaderTimeoutGroups: 'openai-image-header-timeout-groups-initial-announcement',
   oauthInitialModelSelection: 'oauth-initial-model-selection-initial-announcement',
+  usageRateCard: 'usage-rpm-tpm-card-initial-announcement',
 } as const

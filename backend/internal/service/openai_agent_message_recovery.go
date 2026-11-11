@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
-	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -29,12 +28,6 @@ import (
 const openAIAgentRecoveryMaxEntries = 65536
 
 type openAIAgentRecoveryContextKey struct{}
-type openAIAgentRecoveryCompactionHeadersKey struct{}
-
-type openAIAgentRecoveryCompactionHeaders struct {
-	original http.Header
-	applied  [32]byte
-}
 
 type openAIAgentRecoveryBinding struct {
 	accountID  int64
@@ -53,6 +46,7 @@ type openAIAgentRecoveryState struct {
 
 type openAIAgentRecoveryRequest struct {
 	keyID            int64
+	userID           int64
 	delivery         *openAIAgentRecoveryDelivery
 	outputs          [][32]byte
 	disallowLearning bool
@@ -79,7 +73,8 @@ func (s *OpenAIGatewayService) WithOpenAIAgentMessageRecovery(ctx context.Contex
 	request := &openAIAgentRecoveryRequest{groupID: getOpenAIGroupIDFromContext(c), model: model, session: sessionHash}
 	keyID := getAPIKeyIDFromContext(c)
 	request.keyID = keyID
-	request.nativeCompaction = isOpenAINativeCompactionV2(c) && !isOpenAIResponsesCompactPath(c)
+	request.userID = openAIAgentRecoveryHTTPUser(c, keyID)
+	request.nativeCompaction = isOpenAINativeCompactionV2(c)
 	request.disallowLearning = isOpenAIResponsesCompactPath(c) || request.nativeCompaction
 	if s == nil || keyID <= 0 || sessionHash == "" || model == "" {
 		return context.WithValue(ctx, openAIAgentRecoveryContextKey{}, request)
@@ -221,7 +216,7 @@ func (s *OpenAIGatewayService) checkOpenAIAgentRecoveryAccount(ctx context.Conte
 		return openAIAgentRecoveryError("owner_unavailable")
 	}
 	if openAIAgentRecoveryConfig(account, request.model) != request.owner.config {
-		return openAIAgentRecoveryRouteChanged(ctx, account, "account_config")
+		return openAIAgentRecoveryError("route_changed")
 	}
 	return nil
 }
@@ -234,30 +229,20 @@ func (s *OpenAIGatewayService) checkOpenAIAgentRecoveryDispatch(ctx context.Cont
 		return nil
 	}
 	model := gjson.GetBytes(body, "model").String()
+	// Native remote compaction v2 stays on the proven HTTP Responses route and is
+	// rechecked against the owner's exact wire at send time. The legacy
+	// /responses/compact bridge rewrites the body and endpoint, so it remains
+	// outside this contract.
 	if !account.IsOpenAI() || account.HasManagedOpenAIConnections() || account.AuthConnectionID != "" ||
 		account.IsOpenAIPassthroughEnabled() || account.IsCopilotSDKEnabled() || account.IsSIWCEnabled() ||
-		account.IsExcelBPSEnabledForModel(model) || account.IsPrismBrowserEnabledForModel(model) {
-		return openAIAgentRecoveryRouteChanged(ctx, account, "unsupported_adapter")
-	}
-	// Native v2 compaction uses the same Responses endpoint and intact input.
-	// Its final wire is still checked below; a legacy compact bridge is not
-	// evidence that an encrypted task can move to another endpoint.
-	if isOpenAIResponsesCompactPath(c) {
-		return openAIAgentRecoveryRouteChanged(ctx, account, "legacy_compact")
-	}
-	if shouldForwardDeepSeekResponsesLiteViaChatCompletions(account, body) {
-		return openAIAgentRecoveryRouteChanged(ctx, account, "responses_lite_bridge")
-	}
-	if s.resolveUpstreamProtocolFor(ctx, account, APIProtocolResponses, upstreamRoutingModel(account, body, "")) != APIProtocolResponses {
-		return openAIAgentRecoveryRouteChanged(ctx, account, "upstream_protocol")
+		account.IsExcelBPSEnabledForModel(model) || account.IsPrismBrowserEnabledForModel(model) ||
+		isOpenAIResponsesCompactPath(c) ||
+		(isOpenAINativeCompactionV2(c) && shouldForwardDeepSeekResponsesCompactViaChatCompletions(account, body)) ||
+		shouldForwardDeepSeekResponsesLiteViaChatCompletions(account, body) ||
+		s.resolveUpstreamProtocolFor(ctx, account, APIProtocolResponses, upstreamRoutingModel(account, body, "")) != APIProtocolResponses {
+		return openAIAgentRecoveryError("route_changed")
 	}
 	return nil
-}
-
-func openAIAgentRecoveryRouteChanged(ctx context.Context, account *Account, check string) error {
-	logger.FromContext(ctx).Warn("openai.agent_recovery_route_changed",
-		zap.Int64("account_id", account.ID), zap.String("check", check))
-	return openAIAgentRecoveryError("route_changed")
 }
 
 // This gate is called only at the real native HTTP send, after routing,
@@ -273,7 +258,10 @@ func (s *OpenAIGatewayService) prepareOpenAIAgentRecoveryAttempt(ctx context.Con
 	if request == nil || request.keyID <= 0 || request.session == "" || request.model == "" {
 		return noop, nil
 	}
-	if request.disallowLearning && (!request.nativeCompaction || !openAIAgentRecoveryBound(ctx)) {
+	if request.disallowLearning {
+		if request.nativeCompaction && request.owner != nil {
+			return noop, s.checkOpenAIAgentRecoveryCompaction(ctx, account, req)
+		}
 		return noop, nil
 	}
 	if request.delivery != nil {
@@ -334,20 +322,8 @@ func (s *OpenAIGatewayService) prepareOpenAIAgentRecoveryAttempt(ctx context.Con
 			return noop, nil
 		}
 	}
-	wireModel := gjson.GetBytes(body, "model").String()
-	binding := openAIAgentRecoveryBinding{accountID: account.ID, config: openAIAgentRecoveryConfig(account, request.model), wire: openAIAgentRecoveryWire(req, wireModel), expiresAt: time.Now().Add(s.openAIWSSessionStickyTTL())}
-	if request.owner != nil && request.nativeCompaction {
-		// Compare against the actual pre-injection headers, preserving their
-		// original spacing and repeated values. All final non-beta identity
-		// fields and the post-injection beta headers must remain unchanged.
-		wire, valid := openAIAgentRecoveryCompactionWire(req, wireModel, request.owner.wire)
-		if !valid {
-			return noop, openAIAgentRecoveryError("wire_changed")
-		}
-		if wire == request.owner.wire {
-			binding.wire = wire
-		}
-	}
+	wire := openAIAgentRecoveryWireDigest(req.URL.String(), req.Header, gjson.GetBytes(body, "model").String())
+	binding := openAIAgentRecoveryBinding{accountID: account.ID, config: openAIAgentRecoveryConfig(account, request.model), wire: wire, expiresAt: time.Now().Add(s.openAIWSSessionStickyTTL())}
 	if request.owner != nil && !sameOpenAIAgentRecoveryRoute(*request.owner, binding) {
 		return noop, openAIAgentRecoveryError("wire_changed")
 	}
@@ -381,9 +357,6 @@ func (s *OpenAIGatewayService) prepareOpenAIAgentRecoveryAttempt(ctx context.Con
 				return noop, openAIAgentRecoveryError("owner_conflict")
 			}
 		}
-	}
-	if request.disallowLearning {
-		return noop, nil
 	}
 	delivery := newOpenAIAgentRecoveryDelivery(s, ctx, request, binding)
 	request.delivery = delivery
@@ -432,7 +405,11 @@ func (s *OpenAIGatewayService) prepareOpenAIAgentRecoveryAttempt(ctx context.Con
 				// Saturation loses recovery availability, never task contents.
 				continue
 			}
-			state.bindings[key] = binding
+			retained := binding
+			if exists && old.expiresAt.After(retained.expiresAt) {
+				retained.expiresAt = old.expiresAt
+			}
+			state.bindings[key] = retained
 		}
 	}, nil
 }
@@ -480,81 +457,84 @@ func OpenAIAgentToolResultContinuation(ctx context.Context) bool {
 	return r != nil && r.owner != nil && r.toolResult
 }
 
-func openAIAgentRecoveryWire(req *http.Request, model string) [32]byte {
-	wire, _ := json.Marshal([]any{req.URL.String(), openAIAgentRecoveryWireHeaders(req.Header), model})
+// Native remote compaction v2 consumes an already proven task but proves no new
+// route, so it is never published. It must reach the recorded owner with the
+// same account configuration, URL, identity headers, model and intact opaque
+// items. The only tolerated wire difference is the remote_compaction_v2
+// negotiation token that the gateway adds to every v2 compaction turn (API key
+// routes do not advertise it on ordinary turns).
+func (s *OpenAIGatewayService) checkOpenAIAgentRecoveryCompaction(ctx context.Context, account *Account, req *http.Request) error {
+	request := openAIAgentRecoveryFromContext(ctx)
+	if request == nil || request.owner == nil {
+		return nil
+	}
+	if err := s.checkOpenAIAgentRecoveryAccount(ctx, account); err != nil {
+		return err
+	}
+	if !account.IsOpenAI() || account.HasManagedOpenAIConnections() || account.AuthConnectionID != "" ||
+		account.IsOpenAIPassthroughEnabled() || account.IsCopilotSDKEnabled() || account.IsSIWCEnabled() ||
+		req == nil || req.URL == nil || req.GetBody == nil {
+		return openAIAgentRecoveryError("wire_changed")
+	}
+	reader, err := req.GetBody()
+	if err != nil {
+		return openAIAgentRecoveryError("wire_changed")
+	}
+	body, err := io.ReadAll(reader)
+	_ = reader.Close()
+	if err != nil || !utf8.Valid(body) || !openAIEncryptedJSONUnambiguous(body) {
+		return openAIAgentRecoveryError("wire_changed")
+	}
+	items := openAIAgentRecoveryItemDigests(body)
+	if len(items) != len(request.items) {
+		return openAIAgentRecoveryError("wire_changed")
+	}
+	for i := range items {
+		if items[i] != request.items[i] {
+			return openAIAgentRecoveryError("wire_changed")
+		}
+	}
+	model := gjson.GetBytes(body, "model").String()
+	url := req.URL.String()
+	if openAIAgentRecoveryWireDigest(url, req.Header, model) == request.owner.wire ||
+		openAIAgentRecoveryWireDigest(url, withoutOpenAIRemoteCompactionV2Feature(req.Header), model) == request.owner.wire {
+		return nil
+	}
+	return openAIAgentRecoveryError("wire_changed")
+}
+
+func openAIAgentRecoveryWireDigest(url string, header http.Header, model string) [32]byte {
+	wire, _ := json.Marshal([]any{url, openAIAgentRecoveryWireHeaders(header), model})
 	return sha256.Sum256(wire)
 }
 
-func applyOpenAIAgentRecoveryBetaFeatures(ctx context.Context, c *gin.Context, account *Account, req *http.Request) *http.Request {
-	request := openAIAgentRecoveryFromContext(ctx)
-	if request == nil || !request.nativeCompaction || request.owner == nil {
-		applyOpenAICodexBetaFeatures(c, account, req.Header)
-		return req
-	}
-	proof := &openAIAgentRecoveryCompactionHeaders{original: openAIAgentRecoveryBetaHeaders(req.Header)}
-	applyOpenAICodexBetaFeatures(c, account, req.Header)
-	proof.applied = openAIAgentRecoveryBetaDigest(req.Header)
-	return req.WithContext(context.WithValue(req.Context(), openAIAgentRecoveryCompactionHeadersKey{}, proof))
-}
-
-func openAIAgentRecoveryBetaHeaders(header http.Header) http.Header {
-	result := make(http.Header)
-	for key, values := range header {
-		if strings.EqualFold(key, "x-codex-beta-features") {
-			result[key] = slices.Clone(values)
-		}
-	}
-	return result
-}
-
-func openAIAgentRecoveryBetaDigest(header http.Header) [32]byte {
-	raw, _ := json.Marshal(openAIAgentRecoveryWireHeaders(openAIAgentRecoveryBetaHeaders(header)))
-	return sha256.Sum256(raw)
-}
-
-func openAIAgentRecoveryCompactionWire(req *http.Request, model string, expected [32]byte) ([32]byte, bool) {
-	proof, ok := req.Context().Value(openAIAgentRecoveryCompactionHeadersKey{}).(*openAIAgentRecoveryCompactionHeaders)
-	if !ok || proof.applied != openAIAgentRecoveryBetaDigest(req.Header) {
-		return [32]byte{}, false
-	}
-	copy := req.Clone(req.Context())
-	for key := range copy.Header {
-		if strings.EqualFold(key, "x-codex-beta-features") {
-			delete(copy.Header, key)
-		}
-	}
-	for key, values := range proof.original {
-		copy.Header[key] = slices.Clone(values)
-	}
-	if wire := openAIAgentRecoveryWire(copy, model); wire == expected {
-		return wire, true
-	}
-	// Also allow a client to advertise only this required capability on its
-	// compaction request. Other feature changes still cannot match the owner.
-	for key, values := range copy.Header {
+// withoutOpenAIRemoteCompactionV2Feature removes only the compaction
+// negotiation token; every other beta feature and header stays significant.
+func withoutOpenAIRemoteCompactionV2Feature(header http.Header) http.Header {
+	stripped := header.Clone()
+	for key, values := range stripped {
 		if !strings.EqualFold(key, "x-codex-beta-features") {
 			continue
 		}
-		var keptValues []string
+		kept := make([]string, 0, len(values))
 		for _, value := range values {
-			var keptTokens []string
+			tokens := make([]string, 0, 2)
 			for _, token := range strings.Split(value, ",") {
-				if strings.TrimSpace(token) == openAIRemoteCompactionV2Feature {
-					continue
+				if token = strings.TrimSpace(token); token != "" && token != openAIRemoteCompactionV2Feature {
+					tokens = append(tokens, token)
 				}
-				keptTokens = append(keptTokens, token)
 			}
-			if len(keptTokens) > 0 {
-				keptValues = append(keptValues, strings.Join(keptTokens, ","))
+			if len(tokens) > 0 {
+				kept = append(kept, strings.Join(tokens, ","))
 			}
 		}
-		if len(keptValues) == 0 {
-			delete(copy.Header, key)
+		if len(kept) == 0 {
+			delete(stripped, key)
 		} else {
-			copy.Header[key] = keptValues
+			stripped[key] = kept
 		}
 	}
-	return openAIAgentRecoveryWire(copy, model), true
+	return stripped
 }
 
 // Header overrides may retain wire casing rather than net/http's canonical

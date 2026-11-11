@@ -1274,6 +1274,20 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		}
 		if fallbackReason == "" {
 			s.writeOpenAIWSFallbackErrorResponse(c, account, wsErr)
+			if accelerateHTTPSSE && wsResult != nil {
+				wsResult.UpstreamModel = upstreamModel
+				if wsResult.BillingModel == "" {
+					wsResult.BillingModel = billingModel
+				}
+				if wsResult.ImageCount > 0 {
+					wsResult.ImageSize = imageSizeTier
+					wsResult.ImageInputSize = imageInputSize
+					wsResult.BillingModel = imageBillingModel
+				}
+			}
+			if accelerateHTTPSSE {
+				return wsResult, wsErr
+			}
 			return nil, wsErr
 		}
 		// Discard the unused WS handshake header before HTTP commits its own.
@@ -2106,7 +2120,7 @@ func (s *OpenAIGatewayService) buildUpstreamRequest(ctx context.Context, c *gin.
 	applyOpenCodeSessionHeader(c, account, targetURL, req.Header, body, openCodeSessionHintBody(promptCacheKey))
 	// x-codex-beta-features：按真实 Codex 的会话级行为补注（在账号级覆写之后，
 	// 保证不被覆盖丢失）。
-	req = applyOpenAIAgentRecoveryBetaFeatures(ctx, c, account, req)
+	applyOpenAICodexBetaFeatures(c, account, req.Header)
 	setOpenAICodexRoutingHintFromBody(req.Header, account, body)
 	logOpenAIRoutingDiagnosticsFromBody(ctx, account, "http", req.Header, body, "not_applicable")
 	if c != nil && c.Request != nil {

@@ -17,7 +17,7 @@ import (
 func TestIssue715HTTPNativeCompactionPreservesTaskAndRoute(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	for _, accountType := range []string{service.AccountTypeAPIKey, service.AccountTypeOAuth} {
-		for _, features := range [][]string{nil, {"remote_compaction_v2"}, {"feature_a, feature_b"}, {"feature_a", "feature_b"}} {
+		for _, features := range [][]string{nil, {"remote_compaction_v2"}, {"feature_a,feature_b"}, {"feature_a", "remote_compaction_v2", "feature_b"}} {
 			t.Run(accountType+"/"+strings.Join(features, ";"), func(t *testing.T) {
 				accounts := issue715Accounts()
 				if accountType == service.AccountTypeAPIKey {
