@@ -325,3 +325,94 @@ func TestOpenAIClientResponseModelPassthroughSSEWithoutContentType(t *testing.T)
 		})
 	}
 }
+
+func TestOpenAIClientResponseModelJSONWithEventStreamContentType(t *testing.T) {
+	for _, accountType := range []string{AccountTypeAPIKey, AccountTypeOAuth} {
+		for _, passthrough := range []bool{false, true} {
+			for _, filterHeaders := range []bool{false, true} {
+				for _, zeroUsage := range []bool{false, true} {
+					name := accountType
+					if passthrough {
+						name += "/passthrough"
+					} else {
+						name += "/native"
+					}
+					if filterHeaders {
+						name += "/filtered_headers"
+					}
+					if zeroUsage {
+						name += "/zero_usage"
+					}
+					t.Run(name, func(t *testing.T) {
+						c, rec := newOpenAIUpstreamErrorTestContext(t)
+						ctx := context.WithValue(c.Request.Context(), ctxkey.RequestedPublicModel, "public-request-model")
+						ctx = context.WithValue(ctx, ctxkey.Model, "key-mapped-model")
+						c.Request = c.Request.WithContext(ctx)
+						body := `{"id":"resp_mislabeled_json","object":"response","status":"completed","model":"private-reported-model","output":[{"type":"message","content":[{"type":"output_text","text":"data: private-reported-model\nevent: response.completed"}]},{"type":"function_call","name":"inspect","arguments":"{\"model\":\"private-reported-model\"}"}],"usage":{"input_tokens":18469,"output_tokens":5,"input_tokens_details":{"cached_tokens":12000}}}`
+						if zeroUsage {
+							body = strings.NewReplacer(`"input_tokens":18469`, `"input_tokens":0`, `"output_tokens":5`, `"output_tokens":0`, `"cached_tokens":12000`, `"cached_tokens":0`).Replace(body)
+						}
+						resp := newOpenAIUpstreamErrorResponse(http.StatusOK, "\r\n"+body+"\r\n")
+						resp.Header.Set("Content-Type", "text/event-stream; charset=utf-8")
+						cfg := &config.Config{}
+						cfg.Security.ResponseHeaders.Enabled = filterHeaders
+						svc := &OpenAIGatewayService{cfg: cfg, responseHeaderFilter: compileResponseHeaderFilter(cfg)}
+						account := &Account{ID: 1, Platform: PlatformOpenAI, Type: accountType}
+						var usage *OpenAIUsage
+						var responseID string
+						if passthrough {
+							result, err := svc.handleNonStreamingResponsePassthrough(ctx, resp, c, account, "channel-mapped-model", "account-mapped-model")
+							require.NoError(t, err)
+							require.NotNil(t, result)
+							usage, responseID = result.usage, result.responseID
+						} else {
+							result, err := svc.handleNonStreamingResponse(ctx, resp, c, account, "channel-mapped-model", "account-mapped-model")
+							require.NoError(t, err)
+							require.NotNil(t, result)
+							usage, responseID = result.usage, result.responseID
+						}
+						require.Equal(t, http.StatusOK, rec.Code)
+						require.True(t, strings.HasPrefix(rec.Header().Get("Content-Type"), "application/json"), rec.Header().Get("Content-Type"))
+						require.True(t, gjson.Valid(rec.Body.String()))
+						require.Equal(t, "public-request-model", gjson.Get(rec.Body.String(), "model").String())
+						require.Equal(t, "resp_mislabeled_json", responseID)
+						require.Equal(t, "private-reported-model", observedUpstreamResponseModel(c))
+						for _, path := range []string{"output", "usage"} {
+							require.JSONEq(t, gjson.Get(body, path).Raw, gjson.Get(rec.Body.String(), path).Raw)
+						}
+						require.Equal(t, int(gjson.Get(body, "usage.input_tokens").Int()), usage.InputTokens)
+						require.Equal(t, int(gjson.Get(body, "usage.output_tokens").Int()), usage.OutputTokens)
+						require.Equal(t, int(gjson.Get(body, "usage.input_tokens_details.cached_tokens").Int()), usage.CacheReadInputTokens)
+					})
+				}
+			}
+		}
+	}
+}
+
+func TestOpenAIClientResponseModelForwardJSONWithEventStreamContentType(t *testing.T) {
+	for _, accountType := range []string{AccountTypeAPIKey, AccountTypeOAuth} {
+		for _, passthrough := range []bool{false, true} {
+			name := accountType + "/native"
+			if passthrough {
+				name = accountType + "/passthrough"
+			}
+			t.Run(name, func(t *testing.T) {
+				body := `{"id":"resp_7978","object":"response","status":"completed","model":"private-reported-model","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"OK"}]}],"usage":{"input_tokens":37,"output_tokens":9,"input_tokens_details":{"cached_tokens":11}}}`
+				header := http.Header{"Content-Type": []string{"text/event-stream"}, "X-Request-Id": []string{"rid_mislabeled_json"}}
+				rec, upstream, result := runOpenAINonStreamRegressionForAccount(t, accountType, passthrough,
+					`{"model":"gpt-5.4","input":"Reply with exactly OK.","stream":false}`, header, body)
+				requireSingleJSONResponsesObject(t, rec)
+				require.Len(t, upstream.bodies, 1)
+				require.False(t, result.Stream)
+				require.Equal(t, "gpt-5.4", gjson.Get(rec.Body.String(), "model").String())
+				require.Equal(t, "gpt-5.4", result.Model)
+				require.Equal(t, "private-reported-model", result.UpstreamResponseModel)
+				require.Equal(t, "resp_7978", result.ResponseID)
+				require.Equal(t, 37, result.Usage.InputTokens)
+				require.Equal(t, 9, result.Usage.OutputTokens)
+				require.Equal(t, 11, result.Usage.CacheReadInputTokens)
+			})
+		}
+	}
+}

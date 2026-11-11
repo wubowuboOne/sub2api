@@ -2867,7 +2867,8 @@ func (s *OpenAIGatewayService) handleNonStreamingResponsePassthrough(
 	// receive raw SSE text or a terminal event with empty output.
 	// Compatible API-key upstreams can omit or mislabel Content-Type too. A
 	// valid JSON body always stays on the JSON path, even if its text says data:.
-	if isEventStreamResponse(resp.Header) || (bodyLooksLikeSSE && !gjson.ValidBytes(body)) {
+	upstreamIsEventStream := isEventStreamResponse(resp.Header)
+	if (upstreamIsEventStream || bodyLooksLikeSSE) && !gjson.ValidBytes(body) {
 		return s.handlePassthroughSSEToJSON(resp, c, account, body, originalModel, mappedModel)
 	}
 
@@ -2888,7 +2889,7 @@ func (s *OpenAIGatewayService) handleNonStreamingResponsePassthrough(
 	writeOpenAIPassthroughResponseHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
 
 	contentType := resp.Header.Get("Content-Type")
-	if contentType == "" {
+	if contentType == "" || upstreamIsEventStream {
 		contentType = "application/json"
 	}
 	if originalModel != "" {
@@ -2905,6 +2906,10 @@ func (s *OpenAIGatewayService) handleNonStreamingResponsePassthrough(
 		return nil, fmt.Errorf("restore OpenAI Responses client tools: %w", err)
 	}
 	if !writeOpenAICompactSSEBridge(c, resp.StatusCode, body) {
+		if upstreamIsEventStream {
+			// Gin's Data renderer will not replace the copied upstream header.
+			c.Writer.Header().Set("Content-Type", contentType)
+		}
 		c.Data(resp.StatusCode, contentType, body)
 	}
 	return &openaiNonStreamingResultPassthrough{

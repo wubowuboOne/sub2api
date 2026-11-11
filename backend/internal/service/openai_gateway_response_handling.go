@@ -1951,10 +1951,10 @@ func (s *OpenAIGatewayService) handleNonStreamingResponse(ctx context.Context, r
 		observer.ObserveOpenAI(body, strings.TrimSpace(gjson.GetBytes(body, "type").String()))
 	}
 
-	// Detect SSE responses for ALL account types via Content-Type header.
-	// Some OpenAI-compatible upstreams (including other sub2api instances)
-	// may return SSE even when stream=false was requested.
-	if isEventStreamResponse(resp.Header) {
+	// Compatible upstreams can label a complete JSON response as SSE. Prefer
+	// valid JSON so model rewriting and usage extraction still run normally.
+	upstreamIsEventStream := isEventStreamResponse(resp.Header)
+	if upstreamIsEventStream && !gjson.ValidBytes(body) {
 		return s.handleSSEToJSON(resp, c, account, body, originalModel, mappedModel)
 	}
 	// bodyLooksLikeSSE is a line-level heuristic: real SSE framing requires
@@ -2018,7 +2018,7 @@ func (s *OpenAIGatewayService) handleNonStreamingResponse(ctx context.Context, r
 
 	contentType := "application/json"
 	if s.cfg != nil && !s.cfg.Security.ResponseHeaders.Enabled {
-		if upstreamType := resp.Header.Get("Content-Type"); upstreamType != "" {
+		if upstreamType := resp.Header.Get("Content-Type"); upstreamType != "" && !upstreamIsEventStream {
 			contentType = upstreamType
 		}
 	}
