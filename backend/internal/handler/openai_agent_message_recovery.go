@@ -17,6 +17,7 @@ func (h *OpenAIGatewayHandler) handleOpenAIAgentRecoveryError(c *gin.Context, er
 	if !errors.As(err, &recovery) {
 		return false
 	}
+	recovery.LogRefusal(c.Request.Context())
 	committed := streamStarted || c.Writer.Written()
 	if !committed && !recovery.RetryAt.IsZero() {
 		seconds := max(int64(1), int64((time.Until(recovery.RetryAt)+time.Second-1)/time.Second))
@@ -33,6 +34,7 @@ func (h *OpenAIGatewayHandler) handleOpenAIWSAgentRecoveryError(ctx context.Cont
 	if !errors.As(err, &recovery) {
 		return false
 	}
+	recovery.LogRefusal(ctx)
 	payload, _ := json.Marshal(map[string]any{
 		"type": "error", "status": recovery.HTTPStatus(),
 		"error": map[string]string{"type": recovery.ClientType(), "code": recovery.ClientCode(), "message": recovery.ClientMessage()},

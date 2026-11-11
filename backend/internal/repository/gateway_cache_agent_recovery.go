@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/hex"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/service"
@@ -60,6 +61,28 @@ func (c *gatewayCache) PublishOpenAIAgentRecovery(ctx context.Context, key, rout
 }
 
 var _ service.OpenAIAgentRecoveryCache = (*gatewayCache)(nil)
+
+var releaseOpenAIAgentRecoveryScript = redis.NewScript(`
+local old = redis.call('GET', KEYS[1])
+if not old then return 1 end
+if old ~= ARGV[1] then return 0 end
+redis.call('DEL', KEYS[1])
+return 1
+`)
+
+func (c *gatewayCache) ReleaseOpenAIAgentRecovery(ctx context.Context, key, route string) (bool, error) {
+	redisKey, err := openAIAgentRecoveryKey(key)
+	if err != nil {
+		return false, err
+	}
+	if !strings.HasPrefix(route, "[1,") {
+		return false, errors.New("invalid encrypted agent ownership release")
+	}
+	result, err := releaseOpenAIAgentRecoveryScript.Run(ctx, c.rdb, []string{redisKey}, route).Int()
+	return result == 1 && err == nil, err
+}
+
+var _ service.OpenAIAgentRecoveryReleaseCache = (*gatewayCache)(nil)
 
 // Waiting for quota does not constitute another successful observation. Only
 // extend the existing exact route; expiry or a concurrent delivery/conflict must

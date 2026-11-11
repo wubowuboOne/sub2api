@@ -1794,70 +1794,89 @@ func (s *OpenAIGatewayService) parentAccountLookup(ctx context.Context) func(int
 }
 
 func (s *OpenAIGatewayService) recheckSelectedOpenAIAccountFromDB(ctx context.Context, account *Account, groupID *int64, platform string, requestedModel string, requireCompact bool, requiredCapability OpenAIEndpointCapability, ticketCompactOverride ...bool) *Account {
-	latest := s.recheckSelectedOpenAIAccountFromDBBeforeProfit(ctx, account, groupID, platform, requestedModel, requireCompact, requiredCapability, ticketCompactOverride...)
-	if latest == nil {
-		return nil
-	}
-	if vetoed, _ := openAIProfitControlVetoReason(ctx, latest); vetoed {
-		return nil
-	}
+	latest, _ := s.recheckSelectedOpenAIAccountFromDBWithReason(ctx, account, groupID, platform, requestedModel, requireCompact, requiredCapability, ticketCompactOverride...)
 	return latest
 }
 
+func (s *OpenAIGatewayService) recheckSelectedOpenAIAccountFromDBWithReason(ctx context.Context, account *Account, groupID *int64, platform string, requestedModel string, requireCompact bool, requiredCapability OpenAIEndpointCapability, ticketCompactOverride ...bool) (*Account, string) {
+	latest, rejection := s.recheckSelectedOpenAIAccountFromDBBeforeProfitWithReason(ctx, account, groupID, platform, requestedModel, requireCompact, requiredCapability, ticketCompactOverride...)
+	if latest == nil {
+		return nil, rejection
+	}
+	if vetoed, reason := openAIProfitControlVetoReason(ctx, latest); vetoed {
+		return nil, reason
+	}
+	return latest, ""
+}
+
 func (s *OpenAIGatewayService) recheckSelectedOpenAIAccountFromDBBeforeProfit(ctx context.Context, account *Account, groupID *int64, platform string, requestedModel string, requireCompact bool, requiredCapability OpenAIEndpointCapability, ticketCompactOverride ...bool) *Account {
+	latest, _ := s.recheckSelectedOpenAIAccountFromDBBeforeProfitWithReason(ctx, account, groupID, platform, requestedModel, requireCompact, requiredCapability, ticketCompactOverride...)
+	return latest
+}
+
+func (s *OpenAIGatewayService) recheckSelectedOpenAIAccountFromDBBeforeProfitWithReason(ctx context.Context, account *Account, groupID *int64, platform string, requestedModel string, requireCompact bool, requiredCapability OpenAIEndpointCapability, ticketCompactOverride ...bool) (*Account, string) {
 	if account == nil {
-		return nil
+		return nil, "account_missing"
 	}
 	platform = NormalizeOpenAICompatiblePlatform(platform)
 	if s.schedulerSnapshot == nil || s.accountRepo == nil {
 		if s.openAIGroupRequiresPrivacySet(ctx, groupID) && !account.IsPrivacySet() {
-			return nil
+			return nil, "privacy_not_set"
 		}
-		if !isOpenAICompatibleAccountEligibleForRequestBeforeProfit(ctx, account, groupID, platform, requestedModel, requireCompact, requiredCapability) {
-			return nil
+		if reason := openAICompatibleAccountEligibilityFailureReasonBeforeProfit(ctx, account, groupID, platform, requestedModel, requireCompact, requiredCapability); reason != "" {
+			if reason == "not_schedulable" {
+				reason = openAIAgentRecoveryAccountRejection(account, time.Now())
+			}
+			return nil, reason
 		}
 		if s.isOpenAIAccountBlockedBySchedulingThreshold(ctx, account) {
-			return nil
+			return nil, "scheduling_threshold"
 		}
 		if !parentHealthyForShadow(account, s.parentAccountLookup(ctx)) {
-			return nil
+			return nil, "shadow_parent_unhealthy"
 		}
 		if s.isOpenAIProxyStreamQuarantined(ctx, account) {
-			return nil
+			return nil, "proxy_stream_quarantined"
 		}
-		return account
+		return account, ""
 	}
 
 	latest, err := s.accountRepo.GetByID(ctx, account.ID)
-	if err != nil || latest == nil {
-		return nil
+	if err != nil {
+		return nil, "account_lookup_failed"
+	}
+	if latest == nil {
+		return nil, "account_missing"
 	}
 	if !s.openAIAccountMatchesSchedulingGroup(latest, groupID) {
-		return nil
+		return nil, "group_mismatch"
 	}
 	if s.openAIGroupRequiresPrivacySet(ctx, groupID) && !latest.IsPrivacySet() {
-		return nil
+		return nil, "privacy_not_set"
 	}
-	if !isOpenAICompatibleAccountEligibleForRequestBeforeProfit(ctx, latest, groupID, platform, requestedModel, requireCompact, requiredCapability) {
-		return nil
+	if reason := openAICompatibleAccountEligibilityFailureReasonBeforeProfit(ctx, latest, groupID, platform, requestedModel, requireCompact, requiredCapability); reason != "" {
+		if reason == "not_schedulable" {
+			reason = openAIAgentRecoveryAccountRejection(latest, time.Now())
+		}
+		return nil, reason
 	}
 	if !parentHealthyForShadow(latest, s.parentAccountLookup(ctx)) {
-		return nil
+		return nil, "shadow_parent_unhealthy"
 	}
 	ticketCompact := requireCompact
 	if len(ticketCompactOverride) > 0 {
 		ticketCompact = ticketCompactOverride[0]
 	}
 	if s.isOpenAIAccountRequestRuntimeBlocked(latest, requestedModel, ticketCompact) {
-		return nil
+		return nil, "runtime_blocked"
 	}
 	if s.isOpenAIAccountBlockedBySchedulingThreshold(ctx, latest) {
-		return nil
+		return nil, "scheduling_threshold"
 	}
 	if s.isOpenAIProxyStreamQuarantined(ctx, latest) {
-		return nil
+		return nil, "proxy_stream_quarantined"
 	}
-	return latest
+	return latest, ""
 }
 
 func (s *OpenAIGatewayService) openAIAccountMatchesSchedulingGroup(account *Account, groupID *int64) bool {
@@ -1868,6 +1887,11 @@ func (s *OpenAIGatewayService) openAIAccountMatchesSchedulingGroup(account *Acco
 }
 
 func (s *OpenAIGatewayService) getSchedulableAccount(ctx context.Context, accountID int64) (*Account, error) {
+	account, err, _ := s.getSchedulableAccountWithReason(ctx, accountID)
+	return account, err
+}
+
+func (s *OpenAIGatewayService) getSchedulableAccountWithReason(ctx context.Context, accountID int64) (*Account, error, string) {
 	var (
 		account *Account
 		err     error
@@ -1877,19 +1901,22 @@ func (s *OpenAIGatewayService) getSchedulableAccount(ctx context.Context, accoun
 	} else {
 		account, err = s.accountRepo.GetByID(ctx, accountID)
 	}
-	if err != nil || account == nil {
-		return account, err
+	if err != nil {
+		return account, err, "schedulable_account_lookup_failed"
+	}
+	if account == nil {
+		return account, err, "schedulable_account_missing"
 	}
 	if s.isOpenAIAccountBlockedBySchedulingThreshold(ctx, account) {
-		return nil, nil
+		return nil, nil, "scheduling_threshold"
 	}
 	// Legacy sticky (advanced scheduler off) must still free-gate Grok OAuth.
 	if account.IsGrok() {
 		if gated := s.filterGrokFreeQuotaAccountsForOpenAI(ctx, []Account{*account}); len(gated) == 0 {
-			return nil, nil
+			return nil, nil, "grok_free_quota_exceeded"
 		}
 	}
-	return account, nil
+	return account, nil, ""
 }
 
 // filterGrokFreeQuotaAccountsForOpenAI applies the same local free soft-gate as

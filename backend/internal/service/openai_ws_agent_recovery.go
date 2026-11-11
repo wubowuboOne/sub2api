@@ -3,6 +3,7 @@ package service
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"net/url"
@@ -115,12 +116,13 @@ func (r *openAIWSAgentRecovery) storedContinuation(source []byte) bool {
 // req captures the actual URL, final authorization headers and outbound model.
 // A fragment namespaces the fingerprint by adapter; this copy is never sent.
 // Thus a WS grant cannot authorize an HTTP or different-adapter continuation.
-func (r *openAIWSAgentRecovery) begin(account *Account, source, payload []byte, req *http.Request, mode string) error {
+func (r *openAIWSAgentRecovery) begin(account *Account, source, payload []byte, req *http.Request, mode string) (err error) {
 	if r == nil {
 		return nil
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	defer func() { r.logRefusal(err) }()
 	if r.finish != nil {
 		r.finish(false)
 		r.finish = nil
@@ -132,12 +134,12 @@ func (r *openAIWSAgentRecovery) begin(account *Account, source, payload []byte, 
 		// bridge payload and accidentally granting a transformed opaque item.
 		reader, err := req.GetBody()
 		if err != nil {
-			return openAIAgentRecoveryError("wire_changed")
+			return r.request.refusal("wire_changed", "ws_continuation", "request_body_open_failed")
 		}
 		actual, err := io.ReadAll(reader)
 		_ = reader.Close()
 		if err != nil {
-			return openAIAgentRecoveryError("wire_changed")
+			return r.request.refusal("wire_changed", "ws_continuation", "request_body_read_failed")
 		}
 		payload = actual
 	}
@@ -150,10 +152,15 @@ func (r *openAIWSAgentRecovery) begin(account *Account, source, payload []byte, 
 		model = initial.model
 	}
 	ctx := r.service.WithOpenAIAgentMessageRecovery(r.ctx, r.c, source, r.session, model)
+	previousRequest := r.request
 	r.request = openAIAgentRecoveryFromContext(ctx)
 	for _, key := range r.request.keys {
 		if r.known[key] && !r.request.known[key] {
-			return openAIAgentRecoveryError("owner_unavailable")
+			refused := r.request.refusal("owner_unavailable", "ws_continuation", "known_binding_missing")
+			if refused.OriginalAccountID == 0 && previousRequest != nil && previousRequest.owner != nil {
+				refused.OriginalAccountID = previousRequest.owner.accountID
+			}
+			return refused
 		}
 	}
 	// These call sites have already selected a native Responses socket or
@@ -163,7 +170,7 @@ func (r *openAIWSAgentRecovery) begin(account *Account, source, payload []byte, 
 	// authoritative; managed/other credentials are excluded by prepare below.
 	r.request.disallowLearning = r.request.disallowLearning || account.IsExcelBPSEnabledForModel(model) || account.IsPrismBrowserEnabledForModel(model)
 	if r.request.owner != nil && r.request.disallowLearning {
-		return openAIAgentRecoveryError("route_changed")
+		return r.request.refusal("route_changed", "ws_continuation", "incompatible_endpoint_or_adapter")
 	}
 	if err := r.service.checkOpenAIAgentRecoveryAccount(ctx, account); err != nil {
 		return err
@@ -171,8 +178,11 @@ func (r *openAIWSAgentRecovery) begin(account *Account, source, payload []byte, 
 	previous := gjson.GetBytes(source, "previous_response_id").String()
 	if r.request.owner != nil && previous != "" {
 		owner, err := r.service.getOpenAIWSStateStore().GetResponseAccount(ctx, r.request.groupID, previous)
-		if err != nil || owner != account.ID || gjson.GetBytes(payload, "previous_response_id").String() != previous {
-			return openAIAgentRecoveryError("owner_unavailable")
+		if err != nil {
+			return r.request.refusal("owner_unavailable", "ws_continuation", "previous_response_owner_lookup_failed")
+		}
+		if owner != account.ID || gjson.GetBytes(payload, "previous_response_id").String() != previous {
+			return r.request.refusal("owner_unavailable", "ws_continuation", "previous_response_owner_mismatch")
 		}
 	}
 	copyReq := req.Clone(ctx)
@@ -223,6 +233,7 @@ func (r *openAIWSAgentRecovery) write(payload []byte, write func() error) error 
 	observer := &gin.Context{Request: (&http.Request{}).WithContext(ctx)}
 	if err := observeOpenAIAgentRecoveryOutput(observer, payload, true); err != nil {
 		r.preventReplay()
+		r.logRefusal(err)
 		return openAIWSAgentRecoveryClose(err)
 	}
 	event := gjson.GetBytes(payload, "type").String()
@@ -265,6 +276,18 @@ func (r *openAIWSAgentRecovery) write(payload []byte, write func() error) error 
 		r.finish = nil
 	}
 	return nil
+}
+
+func (r *openAIWSAgentRecovery) logRefusal(err error) {
+	var refused *OpenAIAgentRecoveryError
+	if !errors.As(err, &refused) {
+		return
+	}
+	ctx := r.ctx
+	if r.request != nil {
+		ctx = context.WithValue(ctx, openAIAgentRecoveryContextKey{}, r.request)
+	}
+	refused.LogRefusal(ctx)
 }
 
 func openAIWSAgentRecoveryClose(err error) error {

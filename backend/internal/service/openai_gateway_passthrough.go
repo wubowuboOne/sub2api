@@ -2158,6 +2158,7 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthroughWithImage(
 	imageBillingModel string,
 	reasoningEfforts ...string,
 ) (*openaiStreamingResultPassthrough, error) {
+	originalModel = openAIClientResponseModel(c, originalModel)
 	earlyPluginEvents := s.openAIPluginSSEEarlyEvents(resp, account)
 	pluginEarlyCommitted := false
 	earlyMetadataPending := false
@@ -2399,7 +2400,7 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthroughWithImage(
 		}
 	}
 
-	needModelReplace := strings.TrimSpace(originalModel) != "" && strings.TrimSpace(mappedModel) != "" && strings.TrimSpace(originalModel) != strings.TrimSpace(mappedModel)
+	needModelReplace := strings.TrimSpace(originalModel) != ""
 	resultWithUsage := func() *openaiStreamingResultPassthrough {
 		if clientDisconnected {
 			markPriorityDownstreamDisconnect(ctx)
@@ -2439,13 +2440,6 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthroughWithImage(
 			trimmedData := strings.TrimSpace(data)
 			rawEventType := effectiveOpenAISSEEventType(dataBytes, pendingSSEEventType)
 			observer.ObserveOpenAI(dataBytes, rawEventType)
-			if needModelReplace {
-				line = s.replaceModelInSSELine(line, mappedModel, originalModel)
-				if replacedData, replaced := extractOpenAISSEDataLine(line); replaced {
-					dataBytes = []byte(replacedData)
-					trimmedData = strings.TrimSpace(replacedData)
-				}
-			}
 			if normalizedData, normalized := normalizeOpenAIResponsesFunctionCallArguments(dataBytes); normalized {
 				dataBytes = normalizedData
 				trimmedData = strings.TrimSpace(string(normalizedData))
@@ -2588,6 +2582,9 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthroughWithImage(
 				dataBytes = sanitizedData
 				trimmedData = strings.TrimSpace(string(sanitizedData))
 				line = "data: " + string(sanitizedData)
+			}
+			if needModelReplace {
+				line = s.replaceModelInSSELine(line, mappedModel, originalModel)
 			}
 			metricPayload, metricType := metricEvent.observeLine("data: " + trimmedData)
 			lineStartsClientOutput = forceFlushFailedEvent || openAIStreamDataStartsClientOutput(trimmedData, eventType)
@@ -2848,6 +2845,7 @@ func (s *OpenAIGatewayService) handleNonStreamingResponsePassthrough(
 	originalModel string,
 	mappedModel string,
 ) (*openaiNonStreamingResultPassthrough, error) {
+	originalModel = openAIClientResponseModel(c, originalModel)
 	body, err := ReadUpstreamResponseBody(resp.Body, s.cfg, c, openAITooLargeError)
 	if err != nil {
 		return nil, err
@@ -2893,9 +2891,10 @@ func (s *OpenAIGatewayService) handleNonStreamingResponsePassthrough(
 	if contentType == "" {
 		contentType = "application/json"
 	}
-	if originalModel != "" && mappedModel != "" && originalModel != mappedModel {
+	if originalModel != "" {
 		body = s.replaceModelInResponseBody(body, mappedModel, originalModel)
 	}
+	body, _ = sanitizeOpenAIClientReasoningError(body)
 	body, err = restoreOpenAIResponsesNamespacePayload(c, body)
 	if err != nil {
 		return nil, fmt.Errorf("restore OpenAI passthrough namespace response: %w", err)
@@ -2919,9 +2918,10 @@ func (s *OpenAIGatewayService) handleNonStreamingResponsePassthrough(
 
 // handlePassthroughSSEToJSON converts an SSE response body into a JSON
 // response for the passthrough path. It mirrors handleSSEToJSON while
-// preserving passthrough payloads, except compact-only model remapping may
-// rewrite model fields back to the original requested model.
+// preserving passthrough payloads while restoring protocol model fields to the
+// client-requested name, including when the upstream applies its own mapping.
 func (s *OpenAIGatewayService) handlePassthroughSSEToJSON(resp *http.Response, c *gin.Context, account *Account, body []byte, originalModel string, mappedModel string) (*openaiNonStreamingResultPassthrough, error) {
+	originalModel = openAIClientResponseModel(c, originalModel)
 	bodyText := string(body)
 	terminalType, terminalPayload, terminalOK := extractOpenAISSETerminalEvent(bodyText)
 	if terminalOK && (terminalType == "response.failed" || terminalType == "error") {
@@ -2938,7 +2938,7 @@ func (s *OpenAIGatewayService) handlePassthroughSSEToJSON(resp *http.Response, c
 		if s.writeOpenAIContextLimitError(resp, c, account, terminalPayload, true) {
 			return nil, fmt.Errorf("non-streaming openai context limit: %s", msg)
 		}
-		writeErr := s.writeOpenAINonStreamingProtocolError(resp, c, msg)
+		writeErr := s.writeOpenAINonStreamingProtocolError(resp, c, msg, terminalPayload)
 		if account != nil && account.IsGrok() && isGrokContentPolicyRejection(http.StatusForbidden, terminalPayload) {
 			return nil, &grokContentPolicyError{message: msg}
 		}
@@ -2966,7 +2966,7 @@ func (s *OpenAIGatewayService) handlePassthroughSSEToJSON(resp *http.Response, c
 		}
 		finalResponse = supplementCompactionItemFromSSE(c, finalResponse, bodyText)
 		body = finalResponse
-		if originalModel != "" && mappedModel != "" && originalModel != mappedModel {
+		if originalModel != "" {
 			body = s.replaceModelInResponseBody(body, mappedModel, originalModel)
 		}
 		// Correct tool calls in final response
@@ -2978,7 +2978,7 @@ func (s *OpenAIGatewayService) handlePassthroughSSEToJSON(resp *http.Response, c
 		restoredBody = restoreCodexToolNamesFromContext(c, restoredBody)
 		body = restoredBody
 	} else {
-		if originalModel != "" && mappedModel != "" && originalModel != mappedModel {
+		if originalModel != "" {
 			bodyText = s.replaceModelInSSEBody(bodyText, mappedModel, originalModel)
 		}
 		body = []byte(bodyText)

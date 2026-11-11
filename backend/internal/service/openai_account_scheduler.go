@@ -426,13 +426,27 @@ func (s *defaultOpenAIAccountScheduler) Select(
 		return nil, decision, recovery.lookupErr
 	}
 	if recovery != nil && recovery.conflict {
-		return nil, decision, openAIAgentRecoveryError("owner_conflict")
+		return nil, decision, recovery.refusal("owner_conflict", "scheduler", "conflicting_task_owners")
 	}
 	if recovery != nil && recovery.owner != nil {
 		if req.Platform != PlatformOpenAI || req.SessionHash != recovery.session ||
 			derefGroupID(req.GroupID) != recovery.groupID || req.RequestedModel != recovery.model {
-			return nil, decision, openAIAgentRecoveryError("owner_unavailable")
+			rejection := "model_scope_mismatch"
+			switch {
+			case req.Platform != PlatformOpenAI:
+				rejection = "platform_scope_mismatch"
+			case req.SessionHash != recovery.session:
+				rejection = "session_scope_mismatch"
+			case derefGroupID(req.GroupID) != recovery.groupID:
+				rejection = "group_scope_mismatch"
+			}
+			return nil, decision, recovery.refusal("owner_unavailable", "scheduler", rejection)
 		}
+		if err := s.service.releaseDisabledOpenAIAgentOwner(ctx, recovery); err != nil {
+			return nil, decision, err
+		}
+	}
+	if recovery != nil && recovery.owner != nil {
 		req.StickyAccountID = recovery.owner.accountID
 		req.StickyWeighted = false
 		req.PreserveStickyBinding = true
@@ -556,20 +570,27 @@ func (s *defaultOpenAIAccountScheduler) Select(
 	}
 	if recovery != nil && recovery.owner != nil {
 		if req.GuardianParentAccountID > 0 && req.GuardianParentAccountID != recovery.owner.accountID {
-			return nil, decision, openAIAgentRecoveryError("owner_unavailable")
+			return nil, decision, recovery.refusal("owner_unavailable", "scheduler", "guardian_owner_mismatch")
 		}
 		if previousResponseID != "" {
 			ownerID, readErr := s.service.getOpenAIWSStateStore().GetResponseAccount(ctx, derefGroupID(req.GroupID), previousResponseID)
-			if readErr != nil || ownerID != recovery.owner.accountID {
-				return nil, decision, openAIAgentRecoveryError("owner_unavailable")
+			if readErr != nil {
+				return nil, decision, recovery.refusal("owner_unavailable", "scheduler", "previous_response_owner_lookup_failed")
+			}
+			if ownerID != recovery.owner.accountID {
+				if ownerID == 0 {
+					return nil, decision, recovery.refusal("owner_unavailable", "scheduler", "previous_response_owner_missing")
+				}
+				return nil, decision, recovery.refusal("owner_unavailable", "scheduler", "previous_response_owner_mismatch")
 			}
 		}
-		selection, _, err = s.selectBySessionHash(ctx, req)
+		var rejection string
+		selection, _, err, rejection = s.selectBySessionHashWithReason(ctx, req)
 		if err != nil {
 			return nil, decision, err
 		}
 		if selection == nil || selection.Account == nil {
-			return nil, decision, openAIAgentRecoveryError("owner_unavailable")
+			return nil, decision, recovery.refusal("owner_unavailable", "session_selection", rejection)
 		}
 		decision.Layer = openAIAccountScheduleLayerSessionSticky
 		decision.StickySessionHit = true
@@ -704,9 +725,20 @@ func (s *defaultOpenAIAccountScheduler) selectBySessionHash(
 	ctx context.Context,
 	req OpenAIAccountScheduleRequest,
 ) (*AccountSelectionResult, bool, error) {
+	selection, escaped, err, _ := s.selectBySessionHashWithReason(ctx, req)
+	return selection, escaped, err
+}
+
+func (s *defaultOpenAIAccountScheduler) selectBySessionHashWithReason(
+	ctx context.Context,
+	req OpenAIAccountScheduleRequest,
+) (*AccountSelectionResult, bool, error, string) {
+	reject := func(reason string) (*AccountSelectionResult, bool, error, string) {
+		return nil, false, nil, reason
+	}
 	sessionHash := strings.TrimSpace(req.SessionHash)
 	if sessionHash == "" || s == nil || s.service == nil || (s.service.cache == nil && req.StickyAccountID <= 0) {
-		return nil, false, nil
+		return reject("session_selection_unavailable")
 	}
 
 	accountID := req.StickyAccountID
@@ -720,38 +752,56 @@ func (s *defaultOpenAIAccountScheduler) selectBySessionHash(
 		accountID, err = s.service.getStickySessionAccountID(ctx, req.GroupID, sessionHash)
 		observeOpenAIStickyBinding(ctx, req.GroupID, sessionHash, accountID, err)
 		if err != nil || accountID <= 0 {
-			return nil, false, nil
+			return reject("sticky_owner_lookup_failed")
 		}
 	}
 	if accountID <= 0 {
-		return nil, false, nil
+		return reject("sticky_owner_missing")
 	}
 	if req.ExcludedIDs != nil {
 		if _, excluded := req.ExcludedIDs[accountID]; excluded {
-			return nil, false, nil
+			return reject("account_excluded")
 		}
 	}
 
-	account, err := s.service.getSchedulableAccount(ctx, accountID)
+	account, err, rejection := s.service.getSchedulableAccountWithReason(ctx, accountID)
 	if err != nil || account == nil {
 		clearBinding()
-		return nil, false, nil
+		return reject(rejection)
 	}
 	if shouldClearStickySession(account, req.RequestedModel) || account.Platform != NormalizeOpenAICompatiblePlatform(req.Platform) || !account.IsOpenAICompatible() || !account.IsSchedulable() {
 		clearBinding()
-		return nil, false, nil
+		if !account.IsSchedulable() {
+			return reject(openAIAgentRecoveryAccountRejection(account, time.Now()))
+		}
+		if account.Platform != NormalizeOpenAICompatiblePlatform(req.Platform) || !account.IsOpenAICompatible() {
+			return reject("platform_mismatch")
+		}
+		return reject("model_rate_limited")
 	}
-	if !s.isAccountRequestCompatible(ctx, account, req) {
-		return nil, false, nil
+	if compatible, reason := s.isAccountRequestCompatibleReason(ctx, account, req); !compatible {
+		return reject(reason)
 	}
 	if !s.isAccountTransportCompatible(account, req.RequiredTransport, req.RequestedModel) {
 		clearBinding()
-		return nil, false, nil
+		return reject("transport_mismatch")
 	}
-	account = s.service.recheckSelectedOpenAIAccountFromDB(ctx, account, req.GroupID, req.Platform, req.RequestedModel, req.RequireCompact, req.RequiredCapability)
-	if account == nil || !s.service.openAIAccountMatchesSchedulingGroup(account, req.GroupID) || !s.isAccountRequestCompatible(ctx, account, req) || !s.isAccountTransportCompatible(account, req.RequiredTransport, req.RequestedModel) {
+	account, rejection = s.service.recheckSelectedOpenAIAccountFromDBWithReason(ctx, account, req.GroupID, req.Platform, req.RequestedModel, req.RequireCompact, req.RequiredCapability)
+	if account == nil {
 		clearBinding()
-		return nil, false, nil
+		return reject(rejection)
+	}
+	if !s.service.openAIAccountMatchesSchedulingGroup(account, req.GroupID) {
+		clearBinding()
+		return reject("group_mismatch")
+	}
+	if compatible, reason := s.isAccountRequestCompatibleReason(ctx, account, req); !compatible {
+		clearBinding()
+		return reject(reason)
+	}
+	if !s.isAccountTransportCompatible(account, req.RequiredTransport, req.RequestedModel) {
+		clearBinding()
+		return reject("transport_mismatch")
 	}
 	// A sticky binding created before BPS was enabled may still point at a
 	// native account. Do not let that old binding bypass the explicit BPS route
@@ -761,7 +811,7 @@ func (s *defaultOpenAIAccountScheduler) selectBySessionHash(
 			for i := range candidates {
 				if candidates[i].ID != account.ID && candidates[i].IsExcelBPSEnabledForModel(req.RequestedModel) {
 					clearBinding()
-					return nil, false, nil
+					return reject("bps_route_preferred")
 				}
 			}
 		}
@@ -770,50 +820,50 @@ func (s *defaultOpenAIAccountScheduler) selectBySessionHash(
 		movable := req.PreviousResponseCanMove || strings.TrimSpace(req.PreviousResponseID) == ""
 		allowed, _, rpmErr := s.service.OpenAIRPMSchedulable(ctx, account, movable)
 		if rpmErr != nil {
-			return nil, false, rpmErr
+			return nil, false, rpmErr, "rpm_lookup_failed"
 		}
 		if !allowed {
 			// Preserve the binding: a new minute or a continuation may use it again.
-			return nil, false, nil
+			return reject("rpm_limited")
 		}
 	}
 	// Free-tier soft gate: sticky session must not pin an over-quota free OAuth account.
 	// Admin QueryQuota / import probes do not use this path.
 	if account != nil && len(s.filterGrokFreeQuotaAccounts(ctx, []Account{*account})) == 0 {
 		clearBinding()
-		return nil, false, nil
+		return reject("grok_free_quota_exceeded")
 	}
 	// Team+model cool: sticky must not pin a sibling under the same team 429 window.
 	now := time.Now()
 	upstreamModel := canonicalOpenAIAccountSchedulingModel(account, req.RequestedModel)
 	if account != nil && isGrokTeamModelRateLimited(account, upstreamModel, now) {
 		clearBinding()
-		return nil, false, nil
+		return reject("grok_team_model_rate_limited")
 	}
 	if account != nil && isGrokModelQuotaBlocked(account.ID, upstreamModel, now) {
 		clearBinding()
-		return nil, false, nil
+		return reject("grok_model_quota_blocked")
 	}
 	if !req.PreserveStickyBinding && s.service.openAICodexTicketShouldYieldSticky(ctx, account, req.GroupID, req.Platform, req.RequestedModel, req.RequireCompact, req.ExcludedIDs) {
 		clearBinding()
-		return nil, false, nil
+		return reject("codex_ticket_yield")
 	}
 	if denied := s.service.priorityLatencyAdmission(req, account); denied != nil {
 		if priorityLatencyOwnershipBound(req) {
-			return nil, false, denied
+			return nil, false, denied, "priority_latency_denied"
 		}
-		return nil, true, nil
+		return nil, true, nil, "priority_latency_yield"
 	}
 	// Ordinary affinity is a preference. A current measured latency penalty
 	// must enter the same scored pool as a freely routed request, independently
 	// of the optional EWMA/capacity escape setting. Ownership paths stay pinned.
 	if s.shouldYieldPriorityLatencySticky(req, account) {
-		return nil, true, nil
+		return nil, true, nil, "priority_latency_yield"
 	}
 	escapeCfg := s.service.openAIStickyEscapeConfig()
 	if escapeCfg.enabled && s.shouldRebalancePrioritySticky(ctx, req, account) {
 		slog.Info("sticky_escape_triggered", "account_id", accountID, "reason", "priority_capacity_imbalance")
-		return nil, true, nil
+		return nil, true, nil, "priority_capacity_imbalance"
 	}
 	if reason, errorRate, ttft, shouldEscape := s.shouldEscapeStickyForRequest(req, accountID, escapeCfg); shouldEscape && !req.DisableStickyEscape && !req.EncryptedReasoning {
 		slog.Info("sticky_escape_triggered",
@@ -822,11 +872,11 @@ func (s *defaultOpenAIAccountScheduler) selectBySessionHash(
 			"error_rate", errorRate,
 			"ttft", ttft,
 		)
-		return nil, true, nil
+		return nil, true, nil, "sticky_escape"
 	}
 	result, acquireErr := s.service.tryAcquireAccountSlot(ctx, accountID, account.Concurrency)
 	if acquireErr != nil && req.DisableStickyEscape {
-		return nil, false, acquireErr
+		return nil, false, acquireErr, "slot_acquisition_failed"
 	}
 	if acquireErr == nil && result != nil && result.Acquired {
 		if !req.PreserveStickyBinding {
@@ -837,7 +887,7 @@ func (s *defaultOpenAIAccountScheduler) selectBySessionHash(
 			Acquired:         true,
 			ReleaseFunc:      result.ReleaseFunc,
 			AccountRequestID: result.RequestID,
-		}), false, nil
+		}), false, nil, ""
 	}
 
 	cfg := s.service.schedulingConfig()
@@ -851,7 +901,7 @@ func (s *defaultOpenAIAccountScheduler) selectBySessionHash(
 				"error_rate", errorRate,
 				"ttft", ttft,
 			)
-			return nil, true, nil
+			return nil, true, nil, "concurrency_full"
 		}
 		return attachSelectionProfitGate(ctx, &AccountSelectionResult{
 			Account: account,
@@ -861,9 +911,9 @@ func (s *defaultOpenAIAccountScheduler) selectBySessionHash(
 				Timeout:        cfg.StickySessionWaitTimeout,
 				MaxWaiting:     cfg.StickySessionMaxWaiting,
 			},
-		}), false, nil
+		}), false, nil, ""
 	}
-	return nil, false, nil
+	return reject("slot_unavailable_without_wait_plan")
 }
 
 func openAIStickyAccountMatchesGroup(account *Account, groupID *int64) bool {

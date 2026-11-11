@@ -1,7 +1,6 @@
 package service
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -591,11 +590,8 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 	responseID := ""
 	var finalResponse []byte
 	wroteDownstream := false
-	needModelReplace := originalModel != mappedModel
-	var mappedModelBytes []byte
-	if needModelReplace && mappedModel != "" {
-		mappedModelBytes = []byte(mappedModel)
-	}
+	clientModel := openAIClientResponseModel(c, originalModel)
+	needModelReplace := clientModel != ""
 	bufferedStreamEvents := make([][]byte, 0, 4)
 	flushEarlyEvents := reqStream && decision.Reason == openAIOAuthWSSSEAccelerationReason
 	bufferedControlMetadataBytes := 0
@@ -715,6 +711,7 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 		if clientDisconnected {
 			return
 		}
+		message, _ = sanitizeOpenAIClientReasoningError(message)
 		frame := make([]byte, 0, len(message)+8)
 		frame = append(frame, "data: "...)
 		frame = append(frame, message...)
@@ -928,8 +925,8 @@ readLoop:
 		}
 
 		if !clientDisconnected {
-			if needModelReplace && len(mappedModelBytes) > 0 && openAIWSEventMayContainModel(eventType) && bytes.Contains(message, mappedModelBytes) {
-				message = replaceOpenAIWSMessageModel(message, mappedModel, originalModel)
+			if needModelReplace && openAIWSEventMayContainModel(eventType) {
+				message = replaceOpenAIWSMessageModel(message, mappedModel, clientModel)
 			}
 			if openAIWSEventMayContainToolCalls(eventType) && openAIWSMessageLikelyContainsToolCalls(message) {
 				if corrected, changed := s.toolCorrector.CorrectToolCallsInSSEBytes(message); changed {
@@ -1028,7 +1025,7 @@ readLoop:
 				c.JSON(statusCode, gin.H{
 					"error": gin.H{
 						"type":    "upstream_error",
-						"message": errMsg,
+						"message": openAIClientReasoningErrorMessage(errMsg, openAIClientErrorParam(message)),
 					},
 				})
 			}
@@ -1118,10 +1115,11 @@ readLoop:
 		}
 
 		if needModelReplace {
-			finalResponse = s.replaceModelInResponseBody(finalResponse, mappedModel, originalModel)
+			finalResponse = s.replaceModelInResponseBody(finalResponse, mappedModel, clientModel)
 		}
 		finalResponse = s.correctToolCallsInResponseBody(finalResponse)
 		populateOpenAIUsageFromResponseJSON(finalResponse, usage)
+		finalResponse, _ = sanitizeOpenAIClientReasoningError(finalResponse)
 		if responseID == "" {
 			responseID = strings.TrimSpace(gjson.GetBytes(finalResponse, "id").String())
 		}

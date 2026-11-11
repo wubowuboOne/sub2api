@@ -26,7 +26,7 @@ func TestMappedResponseModelPreservesOtherData(t *testing.T) {
 		require.Equal(t, body, string(svc.replaceModelInResponseBody([]byte(body), "mapped", "public")))
 		require.Equal(t, "data: "+body, svc.replaceModelInSSELine("data: "+body, "mapped", "public"))
 	}
-	for _, models := range [][2]string{{"same", "same"}, {"", "public"}, {"mapped", ""}} {
+	for _, models := range [][2]string{{"mapped", ""}} {
 		body := `{"model":"alias","response":{"model":"alias"}}`
 		require.Equal(t, body, string(svc.replaceModelInResponseBody([]byte(body), models[0], models[1])))
 		require.Equal(t, "data: "+body, svc.replaceModelInSSELine("data: "+body, models[0], models[1]))
@@ -47,10 +47,7 @@ func TestMappedResponseModelForwarding(t *testing.T) {
 						name += "/passthrough"
 					}
 					t.Run(name, func(t *testing.T) {
-						model := returned
-						if mapped != "public" {
-							model = "public"
-						}
+						model := "public"
 						payload := `{"model":"` + returned + `","choices":[{"delta":{"content":"keep alias","tool_calls":[{"function":{"arguments":"{\"model\":\"alias\"}"}}]}}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`
 						want := strings.Replace(payload, `"model":"`+returned+`"`, `"model":"`+model+`"`, 1)
 						contentType := "application/json"

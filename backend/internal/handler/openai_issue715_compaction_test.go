@@ -87,7 +87,7 @@ func TestIssue715HTTPNativeCompactionReachesProvenOwner(t *testing.T) {
 
 func TestIssue715HTTPNativeCompactionDoesNotRelaxOwnerChecks(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	for _, change := range []string{"credentials", "disabled"} {
+	for _, change := range []string{"credentials", "performance_paused"} {
 		t.Run(change, func(t *testing.T) {
 			accounts := issue715Accounts()
 			upstream := &issue715Upstream{}
@@ -99,7 +99,7 @@ func TestIssue715HTTPNativeCompactionDoesNotRelaxOwnerChecks(t *testing.T) {
 			if change == "credentials" {
 				accounts[0].Credentials = map[string]any{"access_token": "fixture-rotated"}
 			} else {
-				accounts[0].Schedulable = false
+				accounts[0].PerformancePaused = true
 				code = "encrypted_agent_recovery_owner_unavailable"
 			}
 

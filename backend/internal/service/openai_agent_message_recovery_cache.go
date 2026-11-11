@@ -17,6 +17,13 @@ type OpenAIAgentRecoveryCache interface {
 	PublishOpenAIAgentRecovery(ctx context.Context, key, route string, ttl time.Duration) error
 }
 
+// Release only a completed observation of an administratively disabled owner.
+// Pending deliveries, conflicts and a concurrently replaced owner must survive.
+type OpenAIAgentRecoveryReleaseCache interface {
+	OpenAIAgentRecoveryCache
+	ReleaseOpenAIAgentRecovery(ctx context.Context, key, route string) (bool, error)
+}
+
 func encodeOpenAIAgentRecoveryBinding(b openAIAgentRecoveryBinding) string {
 	value, _ := json.Marshal([]any{1, b.accountID, hex.EncodeToString(b.config[:]), hex.EncodeToString(b.wire[:])})
 	return string(value)

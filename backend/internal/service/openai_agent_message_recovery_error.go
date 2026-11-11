@@ -13,6 +13,11 @@ var errOpenAIAgentRecoveryUnavailable = errors.New("encrypted agent continuation
 type OpenAIAgentRecoveryError struct {
 	Reason  string
 	RetryAt time.Time
+
+	// Internal diagnostics must never change the client error contract.
+	OriginalAccountID int64  `json:"-"`
+	RejectionStage    string `json:"-"`
+	RejectionReason   string `json:"-"`
 }
 
 func (e *OpenAIAgentRecoveryError) Error() string { return e.ClientMessage() }

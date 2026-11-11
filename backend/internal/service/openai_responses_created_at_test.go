@@ -188,7 +188,10 @@ func TestHandleStreamingResponse_GrokKeepsUpstreamCreatedAtBytes(t *testing.T) {
 
 	require.NoError(t, err)
 	gotBody, _ := recorder.snapshot()
-	require.Equal(t, body, gotBody)
+	// The fixture requests gpt-5; only the public model name may change.
+	// Keep the exact timestamp and every other byte of the upstream events.
+	want := strings.ReplaceAll(body, `"model":"grok-4.5"`, `"model":"gpt-5"`)
+	require.Equal(t, want, gotBody)
 }
 
 // OpenAI OAuth 流以裸 error 结束：合成的 response.failed 必须带 created_at

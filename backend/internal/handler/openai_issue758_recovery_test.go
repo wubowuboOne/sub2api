@@ -328,7 +328,7 @@ func TestIssue758HTTPWaitingErrorAfterSSECommit(t *testing.T) {
 
 func TestIssue758HTTPQuotaWaitCannotHideHardRestrictions(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	for _, change := range []string{"disabled", "expired", "credentials"} {
+	for _, change := range []string{"performance_paused", "expired", "credentials"} {
 		t.Run(change, func(t *testing.T) {
 			accounts := issue715Accounts()
 			upstream := &issue715Upstream{}
@@ -339,8 +339,8 @@ func TestIssue758HTTPQuotaWaitCannotHideHardRestrictions(t *testing.T) {
 			accounts[0].RateLimitResetAt = &resetAt
 			code := "encrypted_agent_recovery_owner_unavailable"
 			switch change {
-			case "disabled":
-				accounts[0].Schedulable = false
+			case "performance_paused":
+				accounts[0].PerformancePaused = true
 			case "expired":
 				past := time.Now().Add(-time.Minute)
 				accounts[0].AutoPauseOnExpired = true

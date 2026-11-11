@@ -55,6 +55,9 @@ func TestIssue758CooldownUsesLastResetAndPreservesRoute(t *testing.T) {
 			var refused *OpenAIAgentRecoveryError
 			require.ErrorAs(t, scheduler.checkOpenAIAgentRecoveryCooldown(ctx, request, openAIAgentRecoveryFromContext(ctx)), &refused)
 			require.Equal(t, test.reason, refused.Reason)
+			require.EqualValues(t, account.ID, refused.OriginalAccountID)
+			require.Equal(t, "cooldown", refused.RejectionStage)
+			require.Equal(t, test.reason, refused.RejectionReason)
 			require.Equal(t, test.status, refused.HTTPStatus())
 			require.Equal(t, expected, refused.RetryAt)
 			owner := openAIAgentRecoveryFromContext(ctx).owner
@@ -103,6 +106,19 @@ func TestIssue758CooldownCannotDisguiseAdmissionRestrictions(t *testing.T) {
 			}
 			var refused *OpenAIAgentRecoveryError
 			require.ErrorAs(t, scheduler.checkOpenAIAgentRecoveryCooldown(ctx, request, openAIAgentRecoveryFromContext(ctx)), &refused)
+			require.EqualValues(t, account.ID, refused.OriginalAccountID)
+			require.Equal(t, "cooldown", refused.RejectionStage)
+			require.Equal(t, map[string]string{
+				"group_removed":       "group_mismatch",
+				"model_removed":       "model_not_supported",
+				"group_model_removed": "model_not_allowed_in_group",
+				"transport":           "transport_mismatch",
+				"manual_pause":        "account_not_schedulable",
+				"auth_cooldown":       "account_temp_unschedulable",
+				"hard_quota":          "account_quota_exceeded",
+				"excluded":            "account_excluded",
+				"guardian":            "guardian_owner_mismatch",
+			}[change], refused.RejectionReason)
 			require.Equal(t, http.StatusConflict, refused.HTTPStatus(), "a quota reset cannot restore a revoked or incompatible route")
 			require.True(t, refused.RetryAt.IsZero())
 			require.Equal(t, before, service.agentMessageRecovery.bindings, "hard refusal must not extend compatibility evidence")

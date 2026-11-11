@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -9,6 +10,35 @@ import (
 
 	"github.com/stretchr/testify/require"
 )
+
+func TestOpenAIAgentDisabledOwnerReleaseCAS(t *testing.T) {
+	cache, mr := newHTTPResponseOwnerTestCache(t)
+	ctx := context.Background()
+	key := strings.Repeat("a", 64)
+	route := fmt.Sprintf(`[1,1,%q,%q]`, strings.Repeat("b", 64), strings.Repeat("c", 64))
+	for _, old := range []string{"", route, "conflict", "failed", "pending:fixture:" + route, strings.Replace(route, "[1,1,", "[1,2,", 1)} {
+		t.Run(old, func(t *testing.T) {
+			redisKey := openAIAgentRecoveryPrefix + key
+			mr.Del(redisKey)
+			if old != "" {
+				require.NoError(t, cache.rdb.Set(ctx, redisKey, old, time.Hour).Err())
+			}
+			released, err := cache.ReleaseOpenAIAgentRecovery(ctx, key, route)
+			require.NoError(t, err)
+			require.Equal(t, old == "" || old == route, released)
+			value, err := cache.GetOpenAIAgentRecovery(ctx, key)
+			require.NoError(t, err)
+			if released {
+				require.Empty(t, value)
+			} else {
+				require.Equal(t, old, value, "release must preserve concurrent owners and delivery fences")
+				require.Equal(t, time.Hour, mr.TTL(redisKey))
+			}
+		})
+	}
+	_, err := cache.ReleaseOpenAIAgentRecovery(ctx, key, "conflict")
+	require.Error(t, err)
+}
 
 func TestIssue715RedisOwnerSharedExpiryAndConflicts(t *testing.T) {
 	cache, mr := newHTTPResponseOwnerTestCache(t)

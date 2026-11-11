@@ -55,6 +55,7 @@ func (s *OpenAIGatewayService) handleStreamingResponse(ctx context.Context, resp
 }
 
 func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.Context, resp *http.Response, c *gin.Context, account *Account, startTime time.Time, originalModel, mappedModel, reasoningEffort string) (*openaiStreamingResult, error) {
+	originalModel = openAIClientResponseModel(c, originalModel)
 	observer := upstreamResponseModelObserverFromContext(c)
 	if observer == nil {
 		observer = beginUpstreamResponseModelObservation(c)
@@ -431,7 +432,7 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 		}
 	}()
 
-	needModelReplace := originalModel != mappedModel
+	needModelReplace := originalModel != ""
 	var createdAtStamper responsesCreatedAtStamper
 	streamOutputAccumulator := apicompat.NewBufferedResponseAccumulator()
 	streamDoneItems := newResponsesStreamOutputItems()
@@ -1350,18 +1351,18 @@ func effectiveOpenAISSEEventType(payload []byte, eventType string) string {
 	return strings.TrimSpace(eventType)
 }
 
-func (s *OpenAIGatewayService) replaceModelInSSELine(line, fromModel, toModel string) string {
-	if fromModel == "" || toModel == "" || fromModel == toModel {
+func (s *OpenAIGatewayService) replaceModelInSSELine(line, _ string, toModel string) string {
+	if toModel == "" {
 		return line
 	}
 	data, ok := extractOpenAISSEDataLine(line)
-	if !ok || !gjson.Valid(data) {
+	if !ok || !strings.Contains(data, `"model"`) || !gjson.Valid(data) {
 		return line
 	}
 	updated := data
 	// Only protocol model fields are rewritten; text and tool payloads are untouched.
 	for _, path := range []string{"model", "response.model"} {
-		if m := gjson.Get(updated, path); m.Type == gjson.String {
+		if m := gjson.Get(updated, path); m.Type == gjson.String && m.Str != toModel {
 			var err error
 			updated, err = sjson.Set(updated, path, toModel)
 			if err != nil {
@@ -1931,6 +1932,7 @@ func openAICacheCreationTokensFromUsage(value gjson.Result) int {
 }
 
 func (s *OpenAIGatewayService) handleNonStreamingResponse(ctx context.Context, resp *http.Response, c *gin.Context, account *Account, originalModel, mappedModel string) (*openaiNonStreamingResult, error) {
+	originalModel = openAIClientResponseModel(c, originalModel)
 	body, err := ReadUpstreamResponseBody(resp.Body, s.cfg, c, openAITooLargeError)
 	if err != nil {
 		return nil, err
@@ -1987,9 +1989,10 @@ func (s *OpenAIGatewayService) handleNonStreamingResponse(ctx context.Context, r
 	logOpenAISuccessMissingUsage(ctx, c, account, resp, usage, "json", false)
 
 	// Replace model in response if needed
-	if originalModel != mappedModel {
+	if originalModel != "" {
 		body = s.replaceModelInResponseBody(body, mappedModel, originalModel)
 	}
+	body, _ = sanitizeOpenAIClientReasoningError(body)
 	body, err = restoreGrokResponsesClientToolPayload(c, body)
 	if err != nil {
 		return nil, fmt.Errorf("restore Grok Responses client tool response: %w", err)
@@ -2059,6 +2062,7 @@ func bodyHasSSEFraming(body []byte) bool {
 }
 
 func (s *OpenAIGatewayService) handleSSEToJSON(resp *http.Response, c *gin.Context, account *Account, body []byte, originalModel, mappedModel string) (*openaiNonStreamingResult, error) {
+	originalModel = openAIClientResponseModel(c, originalModel)
 	bodyText := string(body)
 	terminalType, terminalPayload, terminalOK := extractOpenAISSETerminalEvent(bodyText)
 	if c.Request != nil {
@@ -2070,7 +2074,7 @@ func (s *OpenAIGatewayService) handleSSEToJSON(resp *http.Response, c *gin.Conte
 			msg = "Upstream compact response failed"
 		}
 		if account != nil && account.IsGrok() && isGrokContentPolicyRejection(http.StatusForbidden, terminalPayload) {
-			_ = s.writeOpenAINonStreamingProtocolError(resp, c, msg)
+			_ = s.writeOpenAINonStreamingProtocolError(resp, c, msg, terminalPayload)
 			return nil, &grokContentPolicyError{message: msg}
 		}
 		if compactErr := newOpenAICompactFallbackSignal(c, terminalPayload, msg); compactErr != nil {
@@ -2082,7 +2086,7 @@ func (s *OpenAIGatewayService) handleSSEToJSON(resp *http.Response, c *gin.Conte
 		if s.writeOpenAIContextLimitError(resp, c, account, terminalPayload, false) {
 			return nil, fmt.Errorf("non-streaming openai context limit: %s", msg)
 		}
-		return nil, s.writeOpenAINonStreamingProtocolError(resp, c, msg)
+		return nil, s.writeOpenAINonStreamingProtocolError(resp, c, msg, terminalPayload)
 	}
 	finalResponse, ok := extractCodexFinalResponse(bodyText)
 	if !ok && terminalOK {
@@ -2107,7 +2111,7 @@ func (s *OpenAIGatewayService) handleSSEToJSON(resp *http.Response, c *gin.Conte
 		}
 		finalResponse = supplementCompactionItemFromSSE(c, finalResponse, bodyText)
 		body = finalResponse
-		if originalModel != mappedModel {
+		if originalModel != "" {
 			body = s.replaceModelInResponseBody(body, mappedModel, originalModel)
 		}
 		// Correct tool calls in final response
@@ -2127,7 +2131,7 @@ func (s *OpenAIGatewayService) handleSSEToJSON(resp *http.Response, c *gin.Conte
 		restoredBody = restoreCodexToolNamesFromContext(c, restoredBody)
 		body = ensureOpenAIResponseObjectCreatedAt(restoredBody)
 	} else {
-		if originalModel != mappedModel {
+		if originalModel != "" {
 			bodyText = s.replaceModelInSSEBody(bodyText, mappedModel, originalModel)
 		}
 		body = []byte(bodyText)
@@ -2239,6 +2243,7 @@ func buildOpenAIResponseFailedSSE(responseID, model string, createdAt int64, sou
 	if message == "" {
 		message = "Upstream response failed"
 	}
+	message = openAIClientReasoningErrorMessage(message, openAIClientErrorParam(source))
 	errorBody := gin.H{"code": code, "message": message}
 	if param := gjson.GetBytes(source, "error.param"); param.Exists() && param.Type != gjson.Null {
 		errorBody["param"] = param.Value()
@@ -2276,12 +2281,12 @@ func buildOpenAIResponseFailedSSE(responseID, model string, createdAt int64, sou
 }
 
 func sanitizeOpenAIResponseFailedEventForClient(payload []byte, eventType string, clientOutputStarted bool) ([]byte, bool) {
+	updated, reasoningSanitized := sanitizeOpenAIClientReasoningError(payload)
 	eventType = strings.TrimSpace(eventType)
 	isFailedEvent := eventType == "response.failed"
 	if (!isFailedEvent && eventType != "error") || len(payload) == 0 || !gjson.ValidBytes(payload) {
-		return payload, false
+		return updated, reasoningSanitized
 	}
-	updated := payload
 	// 容量降载码对 Codex CLI 是致命错误；事件既然要写给客户端（failover 已不可用），
 	// 就改写为客户端可重试的错误码。error 帧与 response.failed 都要改：上游降载
 	// 总是先推 error 帧再收 failed，两帧携带同一个错误。
@@ -2338,16 +2343,20 @@ func sanitizeOpenAIResponseFailedEventForClient(payload []byte, eventType string
 	return updated, !bytes.Equal(updated, payload)
 }
 
-func (s *OpenAIGatewayService) writeOpenAINonStreamingProtocolError(resp *http.Response, c *gin.Context, message string) error {
+func (s *OpenAIGatewayService) writeOpenAINonStreamingProtocolError(resp *http.Response, c *gin.Context, message string, payload ...[]byte) error {
 	message = sanitizeUpstreamErrorMessage(strings.TrimSpace(message))
 	if message == "" {
 		message = "Upstream returned an invalid non-streaming response"
 	}
 	setOpsUpstreamError(c, http.StatusBadGateway, message, "")
+	clientMessage := message
+	if len(payload) > 0 {
+		clientMessage = openAIClientReasoningErrorMessage(message, openAIClientErrorParam(payload[0]))
+	}
 	// body-signal compact 心跳可能已把响应头提交为 200，此时只能以
 	// response.failed 终止事件回传错误，不能再写 JSON+状态码。
 	if openAICompactClientWantsStream(c) && StopOpenAICompactSSEKeepaliveCommitted(c) {
-		writeOpenAICompactSSEFailureMessage(c, http.StatusBadGateway, "upstream_error", message)
+		writeOpenAICompactSSEFailureMessage(c, http.StatusBadGateway, "upstream_error", clientMessage)
 		return fmt.Errorf("non-streaming openai protocol error: %s", message)
 	}
 	responseheaders.WriteFilteredHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
@@ -2355,7 +2364,7 @@ func (s *OpenAIGatewayService) writeOpenAINonStreamingProtocolError(resp *http.R
 	c.JSON(http.StatusBadGateway, gin.H{
 		"error": gin.H{
 			"type":    "upstream_error",
-			"message": message,
+			"message": clientMessage,
 		},
 	})
 	return fmt.Errorf("non-streaming openai protocol error: %s", message)

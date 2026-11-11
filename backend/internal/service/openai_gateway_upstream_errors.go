@@ -741,7 +741,7 @@ func (s *OpenAIGatewayService) handleErrorResponse(
 		c.JSON(status, gin.H{
 			"error": gin.H{
 				"type":    errType,
-				"message": errMsg,
+				"message": openAIClientReasoningErrorMessage(errMsg, openAIClientErrorParam(body)),
 			},
 		})
 		if upstreamMsg == "" {
@@ -895,6 +895,11 @@ func (s *OpenAIGatewayService) handleCompatErrorResponse(
 ) (*OpenAIForwardResult, error) {
 	body := s.readUpstreamErrorBody(resp)
 	body = s.redactAgentIdentitySensitiveBody(context.Background(), account, body)
+	// Sanitize only the client-facing message, after all retry/policy decisions.
+	writeRawError := writeError
+	writeError = func(c *gin.Context, statusCode int, errType, message string) {
+		writeRawError(c, statusCode, errType, openAIClientReasoningErrorMessage(message, openAIClientErrorParam(body)))
+	}
 
 	if isOpenAIUpstreamSessionBlocked(body) {
 		message := sanitizeUpstreamErrorMessage(extractUpstreamErrorMessage(body))

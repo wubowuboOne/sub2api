@@ -1015,19 +1015,26 @@ func appendOpenAIResponsesRequestPathSuffix(baseURL, suffix string) string {
 	return trimmedBase + trimmedSuffix
 }
 
-func (s *OpenAIGatewayService) replaceModelInResponseBody(body []byte, fromModel, toModel string) []byte {
-	// A mapped request must retain its public name even when upstream uses an alias.
-	if fromModel == "" || toModel == "" || fromModel == toModel || !gjson.ValidBytes(body) {
+func (s *OpenAIGatewayService) replaceModelInResponseBody(body []byte, _ string, toModel string) []byte {
+	return rewriteOpenAIClientModel(body, toModel)
+}
+
+func rewriteOpenAIClientModel(body []byte, toModel string) []byte {
+	// The upstream may map the model again even when no local mapping was applied.
+	if toModel == "" || !bytes.Contains(body, []byte(`"model"`)) || !gjson.ValidBytes(body) {
 		return body
 	}
-	if m := gjson.GetBytes(body, "model"); m.Type == gjson.String {
-		newBody, err := sjson.SetBytes(body, "model", toModel)
-		if err != nil {
-			return body
+	updated := body
+	for _, path := range []string{"model", "response.model"} {
+		if m := gjson.GetBytes(updated, path); m.Type == gjson.String && m.Str != toModel {
+			next, err := sjson.SetBytes(updated, path, toModel)
+			if err != nil {
+				return body
+			}
+			updated = next
 		}
-		return newBody
 	}
-	return body
+	return updated
 }
 
 func getOpenAIReasoningEffortFromReqBody(reqBody map[string]any, requestedModel string) (value string, present bool) {

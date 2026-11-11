@@ -199,7 +199,7 @@ func TestIssue715HTTPResumesSameTaskAcrossTwoTurns(t *testing.T) {
 
 func TestIssue715HTTPRecoveryKeepsHardRestrictionsAndScope(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	for _, change := range []string{"disabled", "credentials", "other_key", "other_session", "new_task", "canceled", "timeout"} {
+	for _, change := range []string{"performance_paused", "credentials", "other_key", "other_session", "new_task", "canceled", "timeout"} {
 		t.Run(change, func(t *testing.T) {
 			accounts := issue715Accounts()
 			upstream := &issue715Upstream{}
@@ -209,8 +209,8 @@ func TestIssue715HTTPRecoveryKeepsHardRestrictionsAndScope(t *testing.T) {
 			accounts[0].Priority, accounts[1].Priority = 100, 0
 			body, key, session := issue715Body(true, false), int64(99), "fixture-715-thread"
 			switch change {
-			case "disabled":
-				accounts[0].Schedulable = false
+			case "performance_paused":
+				accounts[0].PerformancePaused = true
 			case "credentials":
 				accounts[0].Credentials = map[string]any{"access_token": "fixture-replaced-identity"}
 			case "other_key":
@@ -224,7 +224,7 @@ func TestIssue715HTTPRecoveryKeepsHardRestrictionsAndScope(t *testing.T) {
 			}
 			status, answer := issue715Request(t, handler, body, key, session, change == "canceled")
 			require.NotContains(t, answer, "Same task: ledger balance 18", "unproved or unavailable route must not report recovered work")
-			if change == "disabled" || change == "credentials" || change == "canceled" {
+			if change == "performance_paused" || change == "credentials" || change == "canceled" {
 				require.Len(t, upstream.ids, 1, "hard rejection/cancellation must not send another task")
 			} else if change == "timeout" {
 				require.Equal(t, []int64{1, 1}, upstream.ids, "ambiguous submitted request must never move to a different account")
@@ -334,7 +334,7 @@ func TestIssue715HTTPFailedDeliveryNeverGrantsOwner(t *testing.T) {
 func TestIssue715HTTPRecoveryErrorsIdentifyCompatibility(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	for _, stream := range []bool{false, true} {
-		for _, change := range []string{"disabled", "credentials"} {
+		for _, change := range []string{"performance_paused", "credentials"} {
 			t.Run(fmt.Sprint(stream)+"/"+change, func(t *testing.T) {
 				accounts := issue715Accounts()
 				upstream := &issue715Upstream{}
@@ -342,8 +342,8 @@ func TestIssue715HTTPRecoveryErrorsIdentifyCompatibility(t *testing.T) {
 				status, _ := issue715Request(t, handler, issue715Body(false, stream), 99, "fixture-715-thread", false)
 				require.Equal(t, 200, status)
 				code := "encrypted_agent_recovery_owner_unavailable"
-				if change == "disabled" {
-					accounts[0].Schedulable = false
+				if change == "performance_paused" {
+					accounts[0].PerformancePaused = true
 				} else {
 					accounts[0].Credentials = map[string]any{"access_token": "fixture-rotated"}
 					code = "encrypted_agent_recovery_route_changed"
