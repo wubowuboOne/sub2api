@@ -673,7 +673,9 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 				if failedMessage == "" {
 					failedMessage = "Upstream response failed"
 				}
-				if isOpenAIInvalidEncryptedContentEvent(dataBytes) {
+				configuredEncryptedRetry := !clientDisconnected && ctx.Err() == nil &&
+					!openAIStreamClientOutputStarted(c, clientOutputStarted) && openAIConfiguredEncryptedContentRetry(account, 0, dataBytes)
+				if !configuredEncryptedRetry && isOpenAIInvalidEncryptedContentEvent(dataBytes) {
 					markOpenAIStreamInvalidEncryptedContent(c, dataBytes)
 				}
 				if account != nil && account.IsGrok() {
@@ -700,7 +702,7 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 				}
 				outputStarted := openAIStreamClientOutputStarted(c, clientOutputStarted)
 				if stageFirstOutput && !outputStarted && !responsesSemanticOutputSeen && !eventStartsClientOutput &&
-					!clientDisconnected && !cyberHit && ctx.Err() == nil && isOpenAIInvalidEncryptedContentSSE(dataBytes, eventType) {
+					!clientDisconnected && !cyberHit && !configuredEncryptedRetry && ctx.Err() == nil && isOpenAIInvalidEncryptedContentSSE(dataBytes, eventType) {
 					if policy, ok := ctx.Value(openAIEncryptedContentRecoveryContextKey{}).(openAIEncryptedContentRecoveryPolicy); ok &&
 						len(openAIRejectedEncryptedDigests(policy.body, dataBytes)) == 1 {
 						// Discard staged metadata; Forward owns the shared retry budget.
@@ -742,6 +744,7 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 						} else {
 							shouldFailover = openAIStreamFailedEventShouldFailover(dataBytes, failedMessage)
 						}
+						shouldFailover = shouldFailover || configuredEncryptedRetry
 					}
 					if account != nil && account.IsGrok() && isGrokContentPolicyRejection(http.StatusForbidden, dataBytes) {
 						shouldFailover = false

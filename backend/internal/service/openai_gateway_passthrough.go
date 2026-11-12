@@ -440,6 +440,9 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 				c.Data(resp.StatusCode, "application/json", probeBody)
 				return nil, fmt.Errorf("copilot sidecar rejected request: %d", resp.StatusCode)
 			}
+			if retry := newOpenAIEncryptedContentRetryError(c, account, resp.StatusCode, resp.Header, probeBody, true); retry != nil {
+				return nil, retry
+			}
 			if retryBody, reason, changed, retryErr := normalizeOpenAIResponsesRejectedFieldRetryBody(resp.StatusCode, body, probeBody); retryErr != nil {
 				return nil, fmt.Errorf("normalize passthrough rejected Responses field retry body: %w", retryErr)
 			} else if changed && rejectedFieldRetryState.Allow(retryBody) {
@@ -2028,6 +2031,9 @@ func (s *OpenAIGatewayService) newOpenAIStreamFailoverErrorWithModel(
 	if len(responseHeaders) > 0 && responseHeaders[0] != nil {
 		headers = responseHeaders[0].Clone()
 	}
+	if retry := newOpenAIEncryptedContentRetryError(c, account, 0, headers, payload, passthrough); retry != nil {
+		return retry
+	}
 	statusCode, shouldDisable := s.handleOpenAIStreamTerminalAccountSideEffects(c, account, payload, message, headers, canonicalModel)
 	// 流内 failed 事件承载于 HTTP 200；使用事件的语义状态更新账号健康，
 	// 再由 failover 引擎按 StatusCode/RetryableOnSameAccount 决定恢复策略。
@@ -2112,6 +2118,7 @@ func (s *OpenAIGatewayService) nonStreamingTerminalFailureFailover(
 	if terminalType == "error" {
 		shouldFailover = openAIStreamErrorEventShouldFailover(payload, message)
 	}
+	shouldFailover = shouldFailover || openAIConfiguredEncryptedContentRetry(account, 0, payload)
 	if !shouldFailover {
 		return nil
 	}
@@ -2533,6 +2540,7 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthroughWithImage(
 						} else {
 							shouldFailover = openAIStreamFailedEventShouldFailover(dataBytes, failedMessage)
 						}
+						shouldFailover = shouldFailover || (!clientDisconnected && ctx.Err() == nil && openAIConfiguredEncryptedContentRetry(account, 0, dataBytes))
 					}
 					if shouldFailover {
 						return resultWithUsage(),
