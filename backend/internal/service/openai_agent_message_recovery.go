@@ -434,11 +434,11 @@ func (s *OpenAIGatewayService) checkOpenAIAgentRecoveryRecords(ctx context.Conte
 		for _, key := range request.keys {
 			raw, err := shared.GetOpenAIAgentRecovery(storeCtx, hex.EncodeToString(key[:]))
 			if err != nil {
-				return request.refusal("store_unavailable", "before_send", "shared_binding_unavailable")
+				return request.refusal("store_unavailable", "before_send", "shared_binding_lookup_failed")
 			}
 			old, found, err := decodeOpenAIAgentRecoveryBinding(raw)
 			if err != nil {
-				return request.refusal("store_unavailable", "before_send", "shared_binding_unavailable")
+				return request.refusal("store_unavailable", "before_send", "shared_binding_invalid")
 			}
 			if found && (old.conflicted || old.failed || old.pending != "" || (!request.disableOwnerBinding && !sameOpenAIAgentRecoveryRoute(old, binding))) {
 				return request.refusal("owner_conflict", "before_send", "shared_binding_conflict_or_undelivered")
