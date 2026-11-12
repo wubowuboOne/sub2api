@@ -4,7 +4,7 @@
 
 # Sub2API
 
-[![Go](https://img.shields.io/badge/Go-1.27.3-00ADD8.svg)](https://golang.org/)
+[![Go](https://img.shields.io/badge/Go-1.27.4-00ADD8.svg)](https://golang.org/)
 [![Vue](https://img.shields.io/badge/Vue-3.4+-4FC08D.svg)](https://vuejs.org/)
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-15+-336791.svg)](https://www.postgresql.org/)
 [![Redis](https://img.shields.io/badge/Redis-7+-DC382D.svg)](https://redis.io/)
@@ -137,7 +137,7 @@ gateway:
 
 | 组件 | 技术 |
 |------|------|
-| 后端 | Go 1.27.3, Gin, Ent |
+| 后端 | Go 1.27.4, Gin, Ent |
 | 前端 | Vue 3.4+, Vite 5+, TailwindCSS |
 | 数据库 | PostgreSQL 15+ |
 | 缓存/队列 | Redis 6.0+ |
@@ -210,6 +210,10 @@ gateway:
 - **⚖️ 合规使用**：请在符合您所在国家或地区法律法规的前提下使用本项目，严禁将其用于任何违法违规用途。
 - **📖 免责声明**：本项目仅供技术学习与研究使用，作者不对因使用本项目导致的账户封禁、服务中断、数据丢失或其他任何直接或间接损失承担责任。
 - **🚫 无商业授权**：本项目从未授权任何个人或组织基于本项目开展任何形式的商业化运营。任何以本项目名义或基于本项目从事的商业行为均与本项目及其开发者无关，由此产生的一切纠纷、损失和法律责任由行为主体自行承担。
+
+## OpenAI 图片输出格式
+
+OAuth / Setup Token 的 GPT Image 1.5、2、2.5、2.6 图片请求以映射后模型调用 Codex 原生端点；2.6 之前的模型保留端点 404/405 时回退 Responses，2.6 不回退。`output_format` / `output_compression` 透传不保证上游按指定格式输出：请求 JPEG/SVG 仍可能返回 4xx 或 HTTP 200、`output_format: "png"` 及 PNG 内容，包括已报告的 `gpt-image-2.5-flare` JPEG 请求。保存或交付前，应核对返回字段（含图片项字段）和真实图片格式，以实际格式设置扩展名和 MIME。成功响应保留状态、内容及 usage；格式不符仍可能计费，自动重试可能重复生成并计费。
 
 ## 许可证
 

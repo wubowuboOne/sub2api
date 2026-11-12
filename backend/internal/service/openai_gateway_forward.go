@@ -793,7 +793,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		maxOutputTokens := gjson.GetBytes(body, "max_output_tokens")
 		if maxOutputTokens.Exists() {
 			switch account.Platform {
-			case PlatformOpenAI, PlatformDeepseek:
+			case PlatformOpenAI, PlatformDeepseek, PlatformQwen:
 				// Preserve Responses-native output limits unless the selected upstream
 				// explicitly rejects the field in the bounded HTTP retry loop below.
 			case PlatformAnthropic:
@@ -842,7 +842,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		markPatchSet("max_output_tokens", clampedCap)
 	}
 	if wsDecision.Transport != OpenAIUpstreamTransportResponsesWebsocketV2 &&
-		!account.IsOpenAIApiKey() && gjson.GetBytes(body, "previous_response_id").Exists() {
+		!account.IsOpenAIApiKey() && !account.QwenSessionCacheEnabled() && gjson.GetBytes(body, "previous_response_id").Exists() {
 		markPatchDelete("previous_response_id")
 	}
 	if openAIRequestBodyMayContainEmptyBase64InputImage(body) {
@@ -951,7 +951,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 	lineageGroupID := getOpenAIGroupIDFromContext(c)
 	lineageEntryBody := body
 	lineageSessionHash := ""
-	if stateStore := s.getOpenAIWSStateStore(); stateStore != nil && stateStore.HasAnySessionInvalidEncryptedContent() {
+	if stateStore := s.getOpenAIWSStateStore(); !openAIAgentRecoveryPreservesHistory(ctx) && stateStore != nil && stateStore.HasAnySessionInvalidEncryptedContent() {
 		lineageSessionHash = openAIEncryptedLineageKey(c, account.ID, s.openAIWSLineageSessionHashFromContext(c, body))
 		if invalidDigests := stateStore.GetSessionInvalidEncryptedContentDigests(lineageGroupID, lineageSessionHash); len(invalidDigests) > 0 {
 			strippedBody, strippedCount := s.stripSessionInvalidEncryptedContentLogged(
@@ -967,7 +967,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 	// 上游通过 WS/SSE 拒绝密文时，安全的一次恢复及无法恢复的出口都记录
 	// 可明确归属的进场密文摘要，供后续 turn 使用同一 lineage 会话键。
 	markInvalidEncryptedContentLineage := func(transport string, rejectedBody, rejection []byte) {
-		if isControlledExperiment(ctx) {
+		if isControlledExperiment(ctx) || openAIAgentRecoveryPreservesHistory(ctx) {
 			return
 		}
 		invalidDigests := openAIRejectedEncryptedDigests(rejectedBody, rejection)
@@ -1330,7 +1330,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 	rejectedFieldRetryState := openAIResponsesRejectedFieldRetryStateForRequest(c, body)
 	// HTTP 400 and pre-output SSE rejection share one same-account retry.
 	recoverInvalidEncryptedContentHTTP := func(resp *http.Response, rejection []byte) (bool, error) {
-		if isControlledExperiment(ctx) || httpInvalidEncryptedContentRetryTried || ctx.Err() != nil ||
+		if isControlledExperiment(ctx) || openAIAgentRecoveryPreservesHistory(ctx) || httpInvalidEncryptedContentRetryTried || ctx.Err() != nil ||
 			(c != nil && c.Request != nil && c.Request.Context().Err() != nil) || openAIStreamClientOutputStarted(c, false) {
 			return false, nil
 		}
@@ -1482,6 +1482,11 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			}
 			respBody = s.redactAgentIdentitySensitiveBody(ctx, account, respBody)
 			resp.Body = io.NopCloser(bytes.NewReader(respBody))
+			if openAIAgentRecoveryPreservesHistory(ctx) {
+				// The administrator allowed one intact cross-account attempt. An
+				// actual rejection is not permission to rewrite or resubmit it.
+				return s.handleErrorResponse(ctx, resp, c, account, body, resolveOpenAIErrorSchedulingModel(billingModel, upstreamModel))
+			}
 			if retry := newOpenAIEncryptedContentRetryError(c, account, resp.StatusCode, resp.Header, respBody, false); retry != nil {
 				return nil, retry
 			}
@@ -1630,7 +1635,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 				if signal, ok := asOpenAICompactFallbackSignal(err); ok {
 					if retryBody, fallbackModel, retry := s.prepareOpenAICompactFallbackRetry(
 						c, account, requestedModel, body, http.StatusBadRequest, signal.message, signal.payload, compactModelFallbackRetried,
-					); retry {
+					); retry && !openAIAgentRecoveryPreservesHistory(ctx) {
 						s.appendOpenAICompactFallbackRetryOps(c, account, resp, signal.payload, signal.message, false)
 						body = retryBody
 						requestView = newOpenAIRequestView(body)
@@ -1687,7 +1692,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 				if signal, ok := asOpenAICompactFallbackSignal(err); ok {
 					if retryBody, fallbackModel, retry := s.prepareOpenAICompactFallbackRetry(
 						c, account, requestedModel, body, http.StatusBadRequest, signal.message, signal.payload, compactModelFallbackRetried,
-					); retry {
+					); retry && !openAIAgentRecoveryPreservesHistory(ctx) {
 						s.appendOpenAICompactFallbackRetryOps(c, account, resp, signal.payload, signal.message, false)
 						body = retryBody
 						requestView = newOpenAIRequestView(body)
@@ -2120,6 +2125,9 @@ func (s *OpenAIGatewayService) buildUpstreamRequest(ctx context.Context, c *gin.
 
 	// 账号级请求头覆写（仅 openai api_key 账号启用时生效；OAuth 路径 no-op）
 	account.ApplyHeaderOverrides(req.Header)
+	if account.QwenSessionCacheEnabled() {
+		req.Header.Set("x-dashscope-session-cache", "enable")
+	}
 	applyOpenCodeSessionHeader(c, account, targetURL, req.Header, body, openCodeSessionHintBody(promptCacheKey))
 	// x-codex-beta-features：按真实 Codex 的会话级行为补注（在账号级覆写之后，
 	// 保证不被覆盖丢失）。

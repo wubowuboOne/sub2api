@@ -87,6 +87,7 @@ func (s *AccountTestService) RunPelicanBackground(ctx context.Context, accountID
 	finished := time.Now()
 	snapshot := *cfg
 	snapshot.ModelID = model
+	snapshot.ActualPrompt = intelligenceTestPrompt(cfg)
 	return &ScheduledTestResult{DirectOAuth401: directOAuth401, DirectOAuthRevoked401: directOAuthRevoked401, Status: status, ResponseText: output, ErrorMessage: message, LatencyMs: finished.Sub(started).Milliseconds(), StartedAt: started, FinishedAt: finished, PelicanConfig: &snapshot}, nil
 }
 
@@ -111,6 +112,10 @@ func (s *ScheduledTestRunnerService) runPelicanPlan(ctx context.Context, plan *S
 	if plan.TriggerSource == quality5xxSource && plan.NextRunAt != nil && plan.NextRunAt.After(now) {
 		next = *plan.NextRunAt
 	}
+	roundTime := now
+	if plan.NextRunAt != nil {
+		roundTime = *plan.NextRunAt
+	}
 	// Persisted lease prevents duplicate execution across ticks and server replicas.
 	// It also recovers automatically after a process crash.
 	until := now.Add(15 * time.Minute).Truncate(time.Microsecond)
@@ -123,6 +128,9 @@ func (s *ScheduledTestRunnerService) runPelicanPlan(ctx context.Context, plan *S
 	}
 	// Result-only metadata must not mutate the stored rule or shared plan config.
 	snapshot := *plan.PelicanConfig
+	if snapshot.PromptMode == PelicanPromptModeRandom {
+		snapshot = *freezePelicanQuestion(plan.PelicanConfig, "scheduled:"+roundTime.UTC().Format(time.RFC3339Nano), nil)
+	}
 	snapshot.QualityRestoreDiagnostic = nil
 	plan.QualityRestoreDiagnostic = nil
 	snapshot.TriggerSource = plan.TriggerSource
@@ -365,9 +373,12 @@ func (s *ScheduledTestRunnerService) runPelicanPlan(ctx context.Context, plan *S
 // the persistence loop with a nil entry. Panic values may contain request data.
 func (s *ScheduledTestRunnerService) runPelicanSample(ctx context.Context, plan *ScheduledTestPlan) (result *ScheduledTestResult) {
 	started := time.Now()
+	// Own the result metadata; rule/client evidence is not proof of the input
+	// assembled by the answer executor. Probes do not send a question prompt.
+	var snapshot PelicanTestConfig
 	failure := func(message string) *ScheduledTestResult {
 		finished := time.Now()
-		return &ScheduledTestResult{Status: "failed", ErrorMessage: message, StartedAt: started, FinishedAt: finished, LatencyMs: finished.Sub(started).Milliseconds(), PelicanConfig: plan.PelicanConfig}
+		return &ScheduledTestResult{Status: "failed", ErrorMessage: message, StartedAt: started, FinishedAt: finished, LatencyMs: finished.Sub(started).Milliseconds(), PelicanConfig: &snapshot}
 	}
 	defer func() {
 		if recover() != nil {
@@ -375,11 +386,18 @@ func (s *ScheduledTestRunnerService) runPelicanSample(ctx context.Context, plan 
 			logger.LegacyPrintf("service.scheduled_test_runner", "pelican plan=%d account=%d sample panicked", plan.ID, plan.AccountID)
 		}
 	}()
+	snapshot = *plan.PelicanConfig
+	snapshot.ActualPrompt = ""
 	if plan.PelicanConfig.QuestionKind == QualityRandomQuestionKind && (plan.PelicanConfig.RandomQuestion == nil || plan.PelicanConfig.Prompt == "" || plan.PelicanConfig.Quality == nil || plan.PelicanConfig.Quality.ExpectedAnswer == "") {
 		return failure("random_question_not_prepared")
 	}
 	if batch := plan.PelicanConfig.QualityBatch; batch != nil && !time.Now().Before(batch.StartDeadline) {
 		return failure("quality_batch_start_window_closed")
+	}
+	if !isOpenAICodexStateProbePlan(plan.PelicanConfig) && ctx.Err() == nil {
+		// Retain the assembled invocation input even if the adapter fails or
+		// panics before returning evidence; this does not assert delivery.
+		snapshot.ActualPrompt = intelligenceTestPrompt(plan.PelicanConfig)
 	}
 	var err error
 	result, err = s.runPelicanAnswer(ctx, plan)
@@ -389,7 +407,11 @@ func (s *ScheduledTestRunnerService) runPelicanSample(ctx context.Context, plan 
 	if result == nil {
 		return failure("scheduled_test_empty_result: background sample returned no result")
 	}
-	result.PelicanConfig = plan.PelicanConfig
+	if result.PelicanConfig != nil {
+		// The trusted executor's snapshot describes the actual answer call.
+		snapshot = *result.PelicanConfig
+	}
+	result.PelicanConfig = &snapshot
 	// 探针题型的结果自带 correct/incorrect/unknown 判定，不经过判题模型。
 	if plan.PelicanConfig.Quality != nil && result.Status == "success" && !isOpenAICodexStateProbePlan(plan.PelicanConfig) {
 		var judgment *QualityJudgment

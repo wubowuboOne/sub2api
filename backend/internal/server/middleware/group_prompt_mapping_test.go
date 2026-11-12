@@ -1,7 +1,9 @@
 package middleware
 
 import (
+	"context"
 	"net/http"
+	"strconv"
 	"testing"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/groupprompt"
@@ -61,5 +63,52 @@ func TestGroupPromptMiddlewareAPIKeyMappingUsesClientModel(t *testing.T) {
 				require.Equal(t, http.StatusOK, w.Code, w.Body.String())
 			})
 		}
+	}
+}
+
+// The upstream per-key ceiling must see the complete injected request while
+// prompt lookup continues to use the public model before API key mapping.
+func TestGroupPromptMappingContextCeilingIncludesPrompt(t *testing.T) {
+	for _, limit := range []int{10, 1000} {
+		t.Run(strconv.Itoa(limit), func(t *testing.T) {
+			id := int64(7)
+			key := allowlistAPIKey(false)
+			key.GroupID = &id
+			key.AllowLongContext = true
+			key.ContextTokenLimit = limit
+			key.ModelMapping = map[string]string{"client-alias": "upstream-target"}
+			prompt := groupprompt.Config{Enabled: true, ModelPrompts: map[string]string{
+				"client-alias": "COMPLETE-CLIENT-PROMPT", "upstream-target": "WRONG-TARGET-PROMPT",
+			}}
+			router := gin.New()
+			router.Use(func(c *gin.Context) { c.Set(string(ContextKeyAPIKey), key); c.Next() })
+			router.Use(GroupModelAllowlist(), APIKeyModelPolicy(), GroupPrompt(service.NewSettingService(&groupPromptSettingsStub{config: &prompt}, nil)))
+			checked, forwarded := false, false
+			router.Use(APIKeyLongContextPolicy(func(ctx context.Context, got *service.APIKey, body []byte, _ ...string) error {
+				checked = true
+				original, ok := service.RequestedPublicModelFromContext(ctx)
+				require.True(t, ok)
+				require.Equal(t, "client-alias", original)
+				require.Equal(t, "upstream-target", gjson.GetBytes(body, "model").String())
+				system := gjson.GetBytes(body, "system").String()
+				require.Equal(t, "COMPLETE-CLIENT-PROMPT\n\nCLIENT-SYSTEM", system)
+				if len(system) > got.ContextTokenLimit {
+					return &service.APIKeyLongContextError{Code: "context_limit_exceeded", Limit: got.ContextTokenLimit}
+				}
+				return nil
+			}))
+			router.POST("/v1/messages", func(c *gin.Context) { forwarded = true; c.Status(http.StatusOK) })
+			response := doJSON(t, router, http.MethodPost, "/v1/messages",
+				`{"model":"client-alias","system":"CLIENT-SYSTEM","messages":[]}`)
+			require.True(t, checked)
+			if limit == 10 {
+				require.False(t, forwarded)
+				require.Equal(t, http.StatusBadRequest, response.Code)
+				require.Contains(t, response.Body.String(), service.APIKeyContextLengthExceededCode)
+			} else {
+				require.True(t, forwarded)
+				require.Equal(t, http.StatusOK, response.Code)
+			}
+		})
 	}
 }

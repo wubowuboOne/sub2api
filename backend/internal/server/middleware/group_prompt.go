@@ -51,6 +51,9 @@ func GroupPrompt(settings *service.SettingService) gin.HandlerFunc {
 			body, err = groupprompt.Prepend(body, format, config.Prompt(model))
 		}
 		if err != nil {
+			if RejectRequestBodyReadError(c, err) {
+				return
+			}
 			status := http.StatusBadRequest
 			var maxErr *http.MaxBytesError
 			if errors.As(err, &maxErr) {

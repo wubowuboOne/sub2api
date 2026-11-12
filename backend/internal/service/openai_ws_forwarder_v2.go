@@ -906,7 +906,7 @@ readLoop:
 			}
 			requesttiming.Output(ctx, startsSemanticOutput, openAIStreamDataStartsVisibleOutput(string(message), eventType), responseTerminal)
 		}
-		if firstTokenMs == nil && startsSemanticOutput {
+		if firstTokenMs == nil && openAIWSFirstTokenEventFunc(s.openAITTFTMode(ctx))(eventType, message) {
 			ms := int(time.Since(startTime).Milliseconds())
 			firstTokenMs = &ms
 		}

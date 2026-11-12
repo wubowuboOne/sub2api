@@ -264,7 +264,7 @@ func loadCodexGroupCatalogAccounts(ctx context.Context, repo AccountRepository, 
 			PlatformDeepseek,
 			PlatformMiniMax,
 			PlatformOpenCodeGo,
-			PlatformMistral,
+			PlatformMistral, PlatformQwen,
 		},
 		false,
 	)
@@ -506,7 +506,7 @@ func newConfiguredCodexModelDescriptor(modelID string) configuredCodexModelDescr
 	}
 
 	if isClaudeCodexModel(modelID) {
-		if claude.IsOpus55(modelID) || claude.IsSonnet55(modelID) || claude.IsHaiku55(modelID) {
+		if claude.IsOpus55(modelID) || claude.IsSonnet55(modelID) || claude.IsHaiku55(modelID) || claude.IsFable52(modelID) || claude.IsMythos52(modelID) {
 			descriptor.ContextWindow = 1_000_000
 			descriptor.MaxContextWindow = 1_000_000
 		}
@@ -515,7 +515,7 @@ func newConfiguredCodexModelDescriptor(modelID string) configuredCodexModelDescr
 		descriptor.SupportsParallelToolCalls = true
 		if levels := configuredCodexClaudeReasoningLevels(modelID); len(levels) > 0 {
 			defaultReasoningLevel := claudeCodexDefaultReasoningLevel(levels)
-			if claude.IsSonnet55(modelID) {
+			if claude.IsSonnet55(modelID) || claude.IsFable52(modelID) || claude.IsMythos52(modelID) {
 				defaultReasoningLevel = "high"
 			}
 			descriptor.DefaultReasoningLevel = &defaultReasoningLevel
@@ -1183,7 +1183,7 @@ func groupCodexModelSupportsImageInput(
 			return false
 		}
 	}
-	if platform != PlatformOpenAI && platform != PlatformGrok && platform != PlatformDeepseek && platform != PlatformOpenCodeGo && platform != PlatformMistral {
+	if platform != PlatformOpenAI && platform != PlatformGrok && platform != PlatformDeepseek && platform != PlatformOpenCodeGo && platform != PlatformMistral && platform != PlatformQwen {
 		return false
 	}
 
@@ -1322,7 +1322,7 @@ func accountCodexModelSupportsImageInput(account *Account, upstreamModel string)
 		return false
 	}
 	switch account.Platform {
-	case PlatformOpenAI, PlatformDeepseek, PlatformOpenCodeGo, PlatformMistral:
+	case PlatformOpenAI, PlatformDeepseek, PlatformOpenCodeGo, PlatformMistral, PlatformQwen:
 		if metadata, ok := account.GetUpstreamModelMetadata(upstreamModel); ok {
 			if modalities := normalizeCodexInputModalities(metadata.InputModalities); len(modalities) > 0 {
 				// Official GPT-6 Astra metadata briefly shipped with a stale

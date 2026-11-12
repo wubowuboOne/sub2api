@@ -139,6 +139,7 @@ docs/*
 !docs/reauth-identity-validation.md
 !docs/openai-context-limit-errors.md
 !docs/openai-agent-continuation.md
+!docs/encrypted-agent-owner-policy.md
 !docs/stream-timing.md
 !docs/openai-sse-delivery.md
 !docs/user-traffic.md
@@ -151,6 +152,7 @@ docs/*
 !docs/registration-email-alias-block.md
 !docs/openai-ws-sse-acceleration.md
 !docs/openai-ultrafast-billing.md
+!docs/openai-oauth-relay-fast-billing.md
 !docs/openai-ws-mode.md
 !docs/oauth-initial-ws.md
 !docs/openai-outbound-identity.md
@@ -164,6 +166,7 @@ docs/*
 !docs/ADMIN_PAYMENT_INTEGRATION_API.md
 !docs/ASYNC_IMAGE_TASKS.md
 !docs/PRISM_BRIDGE_RESEARCH_CN.md
+!docs/OPENAI_IMAGES_CODEX.md
 !docs/BATCH_IMAGE_MVP.md
 !docs/COMPOSITE_GROUPS.md
 !docs/PLUGIN_DEVELOPMENT.md

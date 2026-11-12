@@ -94,6 +94,7 @@ func APIKeyFromService(k *service.APIKey) *APIKey {
 		ModelMapping:       k.ModelMapping,
 		ReasoningEffort:    k.ReasoningEffort,
 		AllowLongContext:   k.AllowLongContext,
+		ContextTokenLimit:  k.ContextTokenLimit,
 		IPWhitelist:        k.IPWhitelist,
 		IPBlacklist:        k.IPBlacklist,
 		LastUsedAt:         k.LastUsedAt,
@@ -665,6 +666,7 @@ func RedeemCodeFromServiceAdmin(rc *service.RedeemCode) *AdminRedeemCode {
 	return &AdminRedeemCode{
 		RedeemCode: redeemCodeFromServiceBase(rc),
 		Notes:      rc.Notes,
+		AutoCredit: rc.AutoCredit,
 	}
 }
 
@@ -735,6 +737,8 @@ func usageLogFromServiceUser(l *service.UsageLog) UsageLog {
 		CacheReadTokens:           l.CacheReadTokens,
 		CacheCreation5mTokens:     l.CacheCreation5mTokens,
 		CacheCreation1hTokens:     l.CacheCreation1hTokens,
+		CacheCreation30mTokens:    l.CacheCreation30mTokens,
+		CacheCreation12hTokens:    l.CacheCreation12hTokens,
 		InputCost:                 l.InputCost,
 		OutputCost:                l.OutputCost,
 		CacheCreationCost:         l.CacheCreationCost,

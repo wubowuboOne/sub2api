@@ -65,6 +65,9 @@ func (h *GatewayHandler) geminiCachedContentsPreamble(c *gin.Context, component 
 func readGeminiCachedContentBody(c *gin.Context) ([]byte, bool) {
 	body, err := pkghttputil.ReadRequestBodyWithPrealloc(c.Request)
 	if err != nil {
+		if middleware.RejectRequestBodyReadError(c, err) {
+			return nil, false
+		}
 		if maxErr, ok := extractMaxBytesError(err); ok {
 			googleError(c, http.StatusRequestEntityTooLarge, buildBodyTooLargeMessage(maxErr.Limit))
 			return nil, false
@@ -226,12 +229,7 @@ func (h *GatewayHandler) GeminiCachedContentsCreate(c *gin.Context) {
 			accountReleaseFunc()
 			service.MarkOpsClientBusinessLimited(c, service.OpsClientBusinessLimitedReasonLocalPolicyDenied)
 			middleware.MarkIngressRejected(c, middleware.IngressRejectLongContextDisabled)
-			code := "context_unverifiable"
-			var policyErr *service.APIKeyLongContextError
-			if errors.As(err, &policyErr) {
-				code = policyErr.Code
-			}
-			googleErrorWithType(c, http.StatusBadRequest, "invalid_request_error", code, err.Error())
+			googleErrorWithType(c, http.StatusBadRequest, "invalid_request_error", service.APIKeyContextLengthExceededCode, service.APIKeyContextLengthExceededMessage)
 			return
 		}
 		usageFields := clientRequestedUsageFields(c, channelMapping, reqModel, mappedModel)
