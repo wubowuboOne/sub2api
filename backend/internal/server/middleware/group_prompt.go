@@ -41,6 +41,11 @@ func GroupPrompt(settings *service.SettingService) gin.HandlerFunc {
 		if err == nil {
 			model := groupModelAllowlistModelFromParams(c)
 			if model == "" {
+				// APIKeyModelPolicy may already have rewritten the body model.
+				// Prompt rules use the public client name, not the routing target.
+				model, _ = service.RequestedPublicModelFromContext(c.Request.Context())
+			}
+			if model == "" {
 				model = requestmodel.FromBodyForRoute(c.FullPath(), c.GetHeader("Content-Type"), body)
 			}
 			body, err = groupprompt.Prepend(body, format, config.Prompt(model))

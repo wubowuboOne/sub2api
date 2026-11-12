@@ -38,7 +38,16 @@ func trimAnthropicCompatResponsesInputToLatestTurn(req *apicompat.ResponsesReque
 	}
 
 	start := latestAnthropicCompatResponsesInputTurnStart(items)
-	trimmed := append([]apicompat.ResponsesInputItem(nil), items[start:]...)
+	// Anthropic system (including the group/model prompt) becomes developer
+	// input during conversion. Carry the current instructions on every turn;
+	// previous_response_id must not make us rely on a stale upstream prefix.
+	trimmed := make([]apicompat.ResponsesInputItem, 0, len(items))
+	for _, item := range items[:start] {
+		if item.Type == "message" && (item.Role == "developer" || item.Role == "system") {
+			trimmed = append(trimmed, item)
+		}
+	}
+	trimmed = append(trimmed, items[start:]...)
 	if len(trimmed) == len(items) {
 		return
 	}
