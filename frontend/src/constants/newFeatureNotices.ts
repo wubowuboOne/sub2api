@@ -4,11 +4,15 @@
  * browser; use a new ID to announce the feature again in a later release.
  */
 export const NEW_FEATURE_NOTICES = {
+  priorityCacheWeight: 'priority-cache-weight-initial-announcement',
+  openai409OmitEncryptedHistory: 'openai-409-omit-encrypted-history-beta',
+  userIdCopy: 'user-id-copy-initial-announcement',
   accountAverageCache: 'account-average-cache-initial-announcement',
   pelicanRandomQuestionBank: 'pelican-random-question-bank',
   antigravityUsageQuery: 'antigravity-usage-query-initial-announcement',
   openaiCacheWriteTTL12h: 'openai-cache-write-12h-initial-announcement',
   easyPayRefundSuccessCode: 'easypay-refund-success-code-initial-announcement',
+  paymentProviderFees: 'payment-provider-method-fees-initial-announcement',
   settingsSaveDock: 'settings-save-dock-initial-announcement',
   qwenPlatform: 'qwen-platform-initial-announcement',
   qwenCache: 'qwen-cache-strict-session-initial-announcement',
@@ -20,6 +24,7 @@ export const NEW_FEATURE_NOTICES = {
   qualityRetestRest: 'quality-retest-rest-initial-announcement',
   qualityOAuth401Cleanup: 'quality-oauth-401-cleanup-initial-announcement',
   keyRisk: 'key-risk-notices-acknowledgement-initial-announcement',
+  keyRiskSources: 'key-risk-per-key-source-restriction-initial-announcement',
   mistralBudgetUsage: 'mistral-budget-usage-initial-announcement',
   deepSeekSearch: 'deepseek-search-provider-initial-announcement',
   groupAntiDistillation: 'group-openai-anti-distillation-initial-announcement',
