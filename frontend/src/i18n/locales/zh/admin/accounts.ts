@@ -1125,7 +1125,7 @@ export default {
         codexImageToolBadgeBlock: '客户端图片工具已移除',
         webSearchOnly: '仅用于网页搜索',
         webSearchDisabled: '关闭网页搜索',
-        webSearchRoutingHint: '仅适用于独立网页搜索接口 /v1/alpha/search。仅搜索账号不参与普通模型调度；关闭搜索不影响普通请求。两个开关互斥。',
+        webSearchRoutingHint: '适用于 /v1/alpha/search，以及分组指定搜索账号后 /v1/messages 中仅含搜索工具的请求。仅搜索账号不参与普通模型调度；关闭搜索不影响普通请求。两个开关互斥。下方探测检查独立搜索；Messages 另外要求模型支持 Responses web_search。',
         webSearchProbe: '探测网页搜索',
         webSearchLastProbe: '最近探测',
         webSearchSupported: '支持',

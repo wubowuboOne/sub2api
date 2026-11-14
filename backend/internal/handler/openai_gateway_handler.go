@@ -1691,6 +1691,12 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 
 	subscription, _ := middleware2.GetSubscriptionFromContext(c)
 	requestPlatform := openAICompatibleRequestPlatform(c.Request.Context(), apiKey)
+	dedicatedWebSearch := requestPlatform == service.PlatformOpenAI && apiKey.Group != nil &&
+		apiKey.Group.WebSearchAccountID > 0 && service.IsOpenAIMessagesWebSearchRequest(body)
+	messagesCapability := service.OpenAIEndpointCapabilityChatCompletions
+	if dedicatedWebSearch {
+		messagesCapability = service.OpenAIEndpointCapabilityAlphaSearch
+	}
 
 	service.SetOpsLatencyMs(c, service.OpsAuthLatencyMsKey, time.Since(requestStart).Milliseconds())
 	routingStart := time.Now()
@@ -1714,7 +1720,11 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 	}
 
 	// 余额模式在途预留（与计费同口径估算；计费任务扣减余额缓存后才释放）。
-	inflightDone, inflightErr := reserveInflightBalance(c, h.billingCacheService, h.gatewayService, apiKey, subscription, tokenInflightEstimate(reqModel, body))
+	messagesEstimate := tokenInflightEstimate(reqModel, body)
+	if dedicatedWebSearch {
+		messagesEstimate = service.InflightEstimateRequest{Model: reqModel, Kind: service.InflightEstimatePerRequest, SearchCalls: 1}
+	}
+	inflightDone, inflightErr := reserveInflightBalance(c, h.billingCacheService, h.gatewayService, apiKey, subscription, messagesEstimate)
 	if inflightErr != nil {
 		status, code, message, retryAfter := billingErrorDetails(inflightErr)
 		if retryAfter > 0 {
@@ -1758,6 +1768,9 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 		}
 		reqLog.Debug("openai_messages.account_selecting", zap.Int("excluded_account_count", len(failedAccountIDs)))
 		c.Request = c.Request.WithContext(service.WithOpenAIForwardModel(c.Request.Context(), currentRoutingModel, false))
+		if dedicatedWebSearch {
+			c.Request = c.Request.WithContext(service.WithOpenAIMessagesWebSearch(c.Request.Context(), apiKey.Group.WebSearchAccountID, currentRoutingModel))
+		}
 		selection, scheduleDecision, err := h.gatewayService.SelectAccountWithSchedulerForCapability(
 			c.Request.Context(),
 			apiKey.GroupID,
@@ -1766,10 +1779,10 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 			currentRoutingModel,
 			failedAccountIDs,
 			service.OpenAIUpstreamTransportAny,
-			service.OpenAIEndpointCapabilityChatCompletions,
+			messagesCapability,
 			false,
 			false,
-			true,
+			!dedicatedWebSearch,
 			requestPlatform,
 		)
 		if err != nil {
@@ -1794,6 +1807,10 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 				zap.Int("excluded_account_count", len(failedAccountIDs)),
 			)
 			if len(failedAccountIDs) == 0 {
+				if dedicatedWebSearch {
+					h.anthropicStreamingAwareError(c, http.StatusServiceUnavailable, "api_error", "The configured web search account is currently unavailable", streamStarted)
+					return
+				}
 				if err != nil {
 					cls := classifyOpenAICompatibleNoAccountErrorFromGin(c, h.gatewayService, apiKey, currentRoutingModel, reqModel)
 					if !cls.ModelNotFound {

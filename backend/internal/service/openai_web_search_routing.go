@@ -115,6 +115,11 @@ func openAIWebSearchAllowedForRequest(ctx context.Context, a *Account, capabilit
 	if route.AccountID > 0 && route.AccountID != a.ID {
 		return false
 	}
+	if messagesSearch, _ := ctx.Value(openAIMessagesWebSearchKey{}).(bool); messagesSearch {
+		// The saved probe tests standalone alpha/search (PAT aside), not the
+		// Responses hosted tool. Its 404 cannot disable a Messages search.
+		return true
+	}
 	probe, _ := a.Extra["openai_web_search_probe"].(map[string]any)
 	supported, known := probe["supported"].(bool)
 	if !known || supported || probe["route"] != openAIWebSearchRouteFingerprint(a) {

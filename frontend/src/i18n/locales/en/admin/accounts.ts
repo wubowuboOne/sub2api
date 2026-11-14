@@ -1017,7 +1017,7 @@ export default {
         codexImageToolBadgeBlock: 'Client image tools stripped',
         webSearchOnly: 'Use for web search only',
         webSearchDisabled: 'Disable web search',
-        webSearchRoutingHint: 'Applies to standalone /v1/alpha/search. Search-only accounts are excluded from ordinary model requests. Disabling search preserves ordinary requests. The switches are mutually exclusive.',
+        webSearchRoutingHint: 'Applies to /v1/alpha/search and search-only /v1/messages requests when the group selects a dedicated search account. Search-only accounts are excluded from ordinary model requests. Disabling search preserves ordinary requests. The switches are mutually exclusive. The probe checks standalone search; Messages additionally requires a model with Responses web_search support.',
         webSearchProbe: 'Probe web search',
         webSearchLastProbe: 'Last probe',
         webSearchSupported: 'Supported',

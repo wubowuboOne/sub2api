@@ -232,9 +232,14 @@ func resolveAccountProxyURL(account *Account) string {
 func writeWebSearchStreamResponse(
 	c *gin.Context, query string, resp *websearch.SearchResponse, model string, startTime time.Time,
 ) (*ForwardResult, error) {
+	return writeWebSearchStreamResponseWithText(c, query, resp, model, startTime, buildTextSummary(query, resp.Results))
+}
+
+func writeWebSearchStreamResponseWithText(
+	c *gin.Context, query string, resp *websearch.SearchResponse, model string, startTime time.Time, textSummary string,
+) (*ForwardResult, error) {
 	msgID := webSearchMsgIDPrefix + uuid.New().String()
 	toolUseID := webSearchToolUseIDPrefix + uuid.New().String()[:16]
-	textSummary := buildTextSummary(query, resp.Results)
 
 	setSSEHeaders(c)
 	w := c.Writer
@@ -350,9 +355,14 @@ func flushSSEJSON(w http.ResponseWriter, event string, data any) error {
 func writeWebSearchNonStreamResponse(
 	c *gin.Context, query string, resp *websearch.SearchResponse, model string, startTime time.Time,
 ) (*ForwardResult, error) {
+	return writeWebSearchNonStreamResponseWithText(c, query, resp, model, startTime, buildTextSummary(query, resp.Results))
+}
+
+func writeWebSearchNonStreamResponseWithText(
+	c *gin.Context, query string, resp *websearch.SearchResponse, model string, startTime time.Time, textSummary string,
+) (*ForwardResult, error) {
 	msgID := webSearchMsgIDPrefix + uuid.New().String()
 	toolUseID := webSearchToolUseIDPrefix + uuid.New().String()[:16]
-	textSummary := buildTextSummary(query, resp.Results)
 
 	msg := map[string]any{
 		"id": msgID, "type": "message", "role": "assistant", "model": model,

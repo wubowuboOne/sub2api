@@ -20,6 +20,14 @@ const (
 	openAIPlatformAlphaSearchURL = "https://api.openai.com/v1/alpha/search"
 )
 
+// Alternate protocol adapters can consume a completed search before committing
+// a client response. A conversion failure must not produce a billable success.
+type openAIAlphaSearchForwardOptions struct {
+	writeResponse         func(int, http.Header, []byte) error
+	responsesBody         []byte
+	useResponsesWebSearch bool
+}
+
 // ForwardAlphaSearch proxies Codex standalone web search without binding the
 // evolving alpha request or response schema.
 //
@@ -27,6 +35,23 @@ const (
 // *OpenAIForwardResult（WebSearchCalls=1，供按次计费）；上游错误被原样透传
 // 给客户端时返回 (nil, nil)，不产生计费。
 func (s *OpenAIGatewayService) ForwardAlphaSearch(ctx context.Context, c *gin.Context, account *Account, body []byte) (*OpenAIForwardResult, error) {
+	return s.forwardAlphaSearch(ctx, c, account, body, nil)
+}
+
+func (s *OpenAIGatewayService) writeAlphaSearchResponse(c *gin.Context, options *openAIAlphaSearchForwardOptions, status int, headers http.Header, body []byte) error {
+	if options != nil && options.writeResponse != nil {
+		return options.writeResponse(status, headers, body)
+	}
+	writeOpenAIPassthroughResponseHeaders(c.Writer.Header(), headers, s.responseHeaderFilter)
+	contentType := headers.Get("Content-Type")
+	if contentType == "" {
+		contentType = "application/json"
+	}
+	c.Data(status, contentType, body)
+	return nil
+}
+
+func (s *OpenAIGatewayService) forwardAlphaSearch(ctx context.Context, c *gin.Context, account *Account, body []byte, options *openAIAlphaSearchForwardOptions) (*OpenAIForwardResult, error) {
 	if s == nil || c == nil || account == nil {
 		return nil, fmt.Errorf("service, context, and account are required")
 	}
@@ -67,8 +92,8 @@ func (s *OpenAIGatewayService) ForwardAlphaSearch(ctx context.Context, c *gin.Co
 	// /responses，但会被 standalone /alpha/search 的 access enforcement
 	// 拒绝为 no_matching_rule。对 PAT 账号使用等价的 hosted web_search
 	// Responses 路径兜底，避免把可用账号误判为搜索不可用。
-	if account.IsOpenAIPersonalAccessToken() {
-		return s.forwardAlphaSearchViaResponsesWebSearch(ctx, c, account, body, token, proxyURL, requestedModel, upstreamModel)
+	if account.IsOpenAIPersonalAccessToken() || (options != nil && options.useResponsesWebSearch) {
+		return s.forwardAlphaSearchViaResponsesWebSearch(ctx, c, account, body, token, proxyURL, requestedModel, upstreamModel, options)
 	}
 
 	req, err := s.buildOpenAIAlphaSearchRequest(ctx, c, account, body, token)
@@ -117,12 +142,9 @@ func (s *OpenAIGatewayService) ForwardAlphaSearch(ctx context.Context, c *gin.Co
 	if !account.IsShadow() {
 		s.UpdateCodexUsageSnapshotFromHeaders(ctx, account.ID, resp.Header)
 	}
-	writeOpenAIPassthroughResponseHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
-	contentType := resp.Header.Get("Content-Type")
-	if contentType == "" {
-		contentType = "application/json"
+	if err := s.writeAlphaSearchResponse(c, options, resp.StatusCode, resp.Header, respBody); err != nil {
+		return nil, err
 	}
-	c.Data(resp.StatusCode, contentType, respBody)
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
 		// 非 2xx（错误/重定向）已原样透传给客户端：不是一次成功的搜索，不计费。
 		return nil, nil
@@ -146,13 +168,37 @@ func (s *OpenAIGatewayService) forwardAlphaSearchViaResponsesWebSearch(
 	proxyURL string,
 	requestedModel string,
 	upstreamModel string,
+	options *openAIAlphaSearchForwardOptions,
 ) (*OpenAIForwardResult, error) {
 	if upstreamModel == "" {
 		upstreamModel = requestedModel
 	}
 	responsesBody, err := buildOpenAIAlphaSearchResponsesWebSearchBody(alphaBody, upstreamModel)
+	if options != nil && len(options.responsesBody) > 0 {
+		// Messages already supplies complete developer/system input. Do not pass
+		// it through the standalone alpha prompt's bounded history summary.
+		responsesBody = ReplaceModelInBody(options.responsesBody, upstreamModel)
+		err = nil
+		if account.UsesOpenAICodexProtocol() {
+			var payload map[string]any
+			if err := json.Unmarshal(responsesBody, &payload); err != nil {
+				return nil, err
+			}
+			transformed := applyCodexOAuthTransformWithOptions(payload, codexOAuthTransformOptions{SkipDefaultInstructions: true, PreserveToolCallIDs: true})
+			if transformed.Error != nil {
+				return nil, transformed.Error
+			}
+			ensureCodexOAuthInstructionsField(payload)
+			responsesBody, err = json.Marshal(payload)
+		}
+	}
 	if err != nil {
 		return nil, err
+	}
+	if options != nil && options.useResponsesWebSearch {
+		if err := s.checkAPIKeyLongContextBeforeSend(ctx, c, responsesBody, upstreamModel); err != nil {
+			return nil, err
+		}
 	}
 	req, err := s.buildOpenAIAlphaSearchResponsesWebSearchRequest(ctx, c, account, alphaBody, responsesBody, token)
 	if err != nil {
@@ -194,12 +240,9 @@ func (s *OpenAIGatewayService) forwardAlphaSearchViaResponsesWebSearch(
 	}
 
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		writeOpenAIPassthroughResponseHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
-		contentType := resp.Header.Get("Content-Type")
-		if contentType == "" {
-			contentType = "application/json"
+		if err := s.writeAlphaSearchResponse(c, options, resp.StatusCode, resp.Header, respBody); err != nil {
+			return nil, err
 		}
-		c.Data(resp.StatusCode, contentType, respBody)
 		return nil, nil
 	}
 
@@ -210,7 +253,12 @@ func (s *OpenAIGatewayService) forwardAlphaSearchViaResponsesWebSearch(
 	if err != nil {
 		return nil, err
 	}
-	c.Data(http.StatusOK, "application/json", alphaRespBody)
+	if options != nil && options.useResponsesWebSearch && !hasCompletedMessagesWebSearchCall(respBody) {
+		return nil, fmt.Errorf("messages web search: upstream completed without executing web search")
+	}
+	if err := s.writeAlphaSearchResponse(c, options, http.StatusOK, nil, alphaRespBody); err != nil {
+		return nil, err
+	}
 	return &OpenAIForwardResult{
 		RequestID:        strings.TrimSpace(resp.Header.Get("x-request-id")),
 		UpstreamHeaders:  resp.Header,
@@ -228,6 +276,15 @@ func openAIAlphaSearchSchedulingModel(account *Account, requestedModel string) s
 }
 
 func (s *OpenAIGatewayService) buildOpenAIAlphaSearchResponsesWebSearchRequest(ctx context.Context, c *gin.Context, account *Account, alphaBody []byte, body []byte, token string) (*http.Request, error) {
+	if account.Type == AccountTypeAPIKey {
+		// Keep the configured Platform/third-party URL, authentication and
+		// header policy; API keys must never be sent to the ChatGPT endpoint.
+		req, err := s.buildUpstreamRequest(ctx, c, account, body, token, true, "", false)
+		if err == nil {
+			req.Header.Set("Accept", "text/event-stream")
+		}
+		return req, err
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, chatgptCodexURL, bytes.NewReader(body))
 	if err != nil {
 		return nil, err

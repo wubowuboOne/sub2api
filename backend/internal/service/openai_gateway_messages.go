@@ -78,6 +78,9 @@ func (s *OpenAIGatewayService) forwardAsAnthropic(
 	rememberOpenCodeInboundBody(c, body)
 	beginUpstreamResponseModelObservation(c)
 	ClearActualOpenAIUpstreamEndpoint(c)
+	if dedicatedSearch, _ := ctx.Value(openAIMessagesWebSearchKey{}).(bool); dedicatedSearch && IsOpenAIMessagesWebSearchRequest(body) {
+		return s.forwardMessagesWebSearch(ctx, c, account, body, defaultMappedModel)
+	}
 	// Web Search 模拟：Chat Completions 转换会丢掉 web_search 工具，纯 web_search
 	// 请求在此直接调用搜索 API 构造 Anthropic 响应，不访问上游。
 	if groupID := getOpenAIGroupIDFromContext(c); shouldEmulateWebSearchFor(ctx, s.settingService, s.channelService, account, &groupID, body) {
