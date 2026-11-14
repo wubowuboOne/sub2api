@@ -75,6 +75,23 @@ func TestOpenAIChatConfiguredRetryReadFailures(t *testing.T) {
 						Body:   &openAIChatStreamReadErrorCloser{payload: []byte(payload), err: failure.err}}
 					result, err := (&OpenAIGatewayService{cfg: cfg}).handleChatStreamingResponse(resp, c, newConfiguredStreamRetryAccount(), "gpt-5.6-terra", "gpt-5.6-terra", "gpt-6-luna", time.Now(), 32)
 					var failover *UpstreamFailoverError
+					if failure.name == "http2_reset" {
+						// A verified peer reset can follow a consumed POST. Preserve
+						// its new no-replay transport contract, even in a 502 pool.
+						require.NotErrorAs(t, err, &failover)
+						code, _, classified := OpenAIUpstreamStreamReadErrorDetails(err)
+						require.True(t, classified)
+						require.Equal(t, OpenAIUpstreamHTTP2StreamErrorCode, code)
+						require.NotNil(t, result)
+						require.Contains(t, rec.Body.String(), "PROTOCOL_ERROR")
+						for _, staged := range []string{"private answer", "private reasoning", "lookup"} {
+							require.NotContains(t, rec.Body.String(), staged)
+						}
+						ops, marked := GetOpsStreamError(c)
+						require.True(t, marked)
+						require.NotNil(t, ops.TransportFailure)
+						return
+					}
 					require.ErrorAs(t, err, &failover)
 					require.Nil(t, result, "a discarded attempt must not produce a billable result")
 					require.True(t, failover.RetryableOnSameAccount)

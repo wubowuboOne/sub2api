@@ -24,9 +24,10 @@ func TestHandleOpenAIUpstreamTransportError_ConfiguredPoolRetry(t *testing.T) {
 		codes      []any
 		wantRetry  bool
 		persistent bool
+		peerReset  bool
 	}{
 		{name: "unexpected_eof", err: eof, pool: true, codes: []any{float64(502)}, wantRetry: true},
-		{name: "http2_protocol_error", err: h2, pool: true, codes: []any{float64(502)}, wantRetry: true},
+		{name: "http2_protocol_error", err: h2, pool: true, codes: []any{float64(502)}, peerReset: true},
 		{name: "connection_reset", err: errors.New("connection reset by peer"), pool: true, codes: []any{float64(502)}, wantRetry: true},
 		{name: "unknown_transport_error", err: errors.New("unexpected transport failure"), pool: true, codes: []any{float64(502)}, wantRetry: true},
 		{name: "upstream_timeout", err: context.DeadlineExceeded, pool: true, codes: []any{float64(502)}, wantRetry: true},
@@ -53,6 +54,20 @@ func TestHandleOpenAIUpstreamTransportError_ConfiguredPoolRetry(t *testing.T) {
 				c, rec := newOpenAITransportErrTestContext()
 				err := svc.handleOpenAIUpstreamTransportError(context.Background(), c, account, tt.err, passthrough)
 				var failover *UpstreamFailoverError
+				if tt.peerReset {
+					require.NotErrorAs(t, err, &failover)
+					code, _, classified := OpenAIUpstreamStreamReadErrorDetails(err)
+					require.True(t, classified)
+					require.Equal(t, OpenAIUpstreamHTTP2StreamErrorCode, code)
+					require.Equal(t, http.StatusBadGateway, rec.Code)
+					require.Contains(t, rec.Body.String(), "Do not automatically retry")
+					require.Empty(t, repo.tempUnschedCalls)
+					require.False(t, svc.isOpenAIAccountRuntimeBlocked(account))
+					ops, marked := GetOpsStreamError(c)
+					require.True(t, marked)
+					require.NotNil(t, ops.TransportFailure)
+					continue
+				}
 				require.ErrorAs(t, err, &failover)
 				require.Equal(t, http.StatusBadGateway, failover.StatusCode)
 				require.Equal(t, tt.wantRetry, failover.RetryableOnSameAccount)
