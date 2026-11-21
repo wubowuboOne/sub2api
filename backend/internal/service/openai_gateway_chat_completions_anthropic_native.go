@@ -173,7 +173,7 @@ func (s *OpenAIGatewayService) handleCCBufferedFromNativeAnthropic(
 	var usage ClaudeUsage
 	resultWithUsage := func() *OpenAIForwardResult {
 		result := &OpenAIForwardResult{RequestID: requestID, UpstreamHeaders: resp.Header,
-			Usage: claudeUsageToOpenAIUsage(&usage), Model: originalModel, BillingModel: billingModel,
+			Usage: claudeUsageToOpenAIUsage(&usage), UsageUnavailable: !streamStatus.usageSeen, Model: originalModel, BillingModel: billingModel,
 			UpstreamModel: upstreamModel, UpstreamEndpoint: "/v1/messages", ReasoningEffort: reasoningEffort,
 			Stream: false, ClientDisconnect: streamStatus.clientDisconnected, Duration: time.Since(startTime)}
 		applyObservedUpstreamResponseModel(c, result)
@@ -266,6 +266,7 @@ func (s *OpenAIGatewayService) handleCCBufferedFromNativeAnthropic(
 		RequestID:        requestID,
 		UpstreamHeaders:  resp.Header,
 		Usage:            claudeUsageToOpenAIUsage(&usage),
+		UsageUnavailable: !streamStatus.usageSeen,
 		Model:            originalModel,
 		BillingModel:     billingModel,
 		UpstreamModel:    upstreamModel,
@@ -326,6 +327,7 @@ func (s *OpenAIGatewayService) handleCCStreamingFromNativeAnthropic(
 			RequestID:        requestID,
 			UpstreamHeaders:  resp.Header,
 			Usage:            claudeUsageToOpenAIUsage(&usage),
+			UsageUnavailable: !streamStatus.usageSeen,
 			Model:            originalModel,
 			BillingModel:     billingModel,
 			UpstreamModel:    upstreamModel,
@@ -395,7 +397,9 @@ func (s *OpenAIGatewayService) handleCCStreamingFromNativeAnthropic(
 			}
 		}
 		if len(responsesEvents) > 0 {
-			c.Writer.Flush()
+			if err := FlushGatewayResponse(c.Writer); err != nil {
+				streamStatus.markClientDisconnected()
+			}
 		}
 		return false
 	}
@@ -464,9 +468,14 @@ func (s *OpenAIGatewayService) handleCCStreamingFromNativeAnthropic(
 			streamStatus.markClientDisconnected()
 			return resultWithUsage(), streamStatus.failure().err
 		}
-		c.Writer.Flush()
+		if err := FlushGatewayResponse(c.Writer); err != nil {
+			streamStatus.markClientDisconnected()
+		}
 	}
 
+	if streamStatus.clientDisconnected {
+		return resultWithUsage(), streamStatus.failure().err
+	}
 	return resultWithUsage(), nil
 }
 
@@ -520,7 +529,7 @@ func writeNativeAnthropicSemanticFailure(c *gin.Context, payload []byte, model s
 		} else {
 			_, _ = fmt.Fprintf(c.Writer, "event: error\ndata: %s\n\n", safeBody)
 		}
-		c.Writer.Flush()
+		_ = FlushGatewayResponse(c.Writer)
 	} else {
 		c.Header("Content-Type", "application/json")
 		c.Data(status, "application/json", safeBody)

@@ -528,7 +528,9 @@ func (s *GatewayService) handleCCStreamingFromAnthropic(
 				stream.markClientDisconnected()
 				return
 			}
-			c.Writer.Flush()
+			if err := FlushGatewayResponse(c.Writer); err != nil {
+				stream.markClientDisconnected()
+			}
 			return
 		}
 		if firstChunk {
@@ -565,7 +567,9 @@ func (s *GatewayService) handleCCStreamingFromAnthropic(
 				}
 			}
 		}
-		c.Writer.Flush()
+		if err := FlushGatewayResponse(c.Writer); err != nil {
+			stream.markClientDisconnected()
+		}
 	}
 
 	for {
@@ -621,8 +625,13 @@ func (s *GatewayService) handleCCStreamingFromAnthropic(
 		stream.markClientDisconnected()
 		return resultWithUsage(), stream.failure().err
 	}
-	c.Writer.Flush()
+	if err := FlushGatewayResponse(c.Writer); err != nil {
+		stream.markClientDisconnected()
+	}
 
+	if stream.clientDisconnected {
+		return resultWithUsage(), stream.failure().err
+	}
 	return resultWithUsage(), nil
 }
 
