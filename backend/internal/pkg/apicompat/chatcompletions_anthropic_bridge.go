@@ -437,6 +437,7 @@ func ChatCompletionsResponseToAnthropic(resp *ChatCompletionsResponse, model str
 		Type:  "message",
 		Role:  "assistant",
 		Model: model,
+		Usage: chatUsageToAnthropicUsage(nil),
 	}
 
 	if resp != nil {
@@ -543,7 +544,7 @@ func chatFinishReasonToAnthropicStopReason(reason string, blocks []AnthropicCont
 // usage shape. Mirrors ChatUsageToResponsesUsage + anthropicUsageFromResponsesUsage.
 func chatUsageToAnthropicUsage(usage *ChatUsage) AnthropicUsage {
 	if usage == nil {
-		return AnthropicUsage{}
+		return AnthropicUsage{CacheCreationInputTokensPresent: true, CacheReadInputTokensPresent: true}
 	}
 
 	cachedTokens := 0
@@ -571,6 +572,7 @@ func chatUsageToAnthropicUsage(usage *ChatUsage) AnthropicUsage {
 		CacheReadInputTokens:            cachedTokens,
 		CacheCreationInputTokens:        cacheCreationTokens,
 		CacheCreationInputTokensPresent: true,
+		CacheReadInputTokensPresent:     true,
 	}
 }
 
@@ -746,6 +748,7 @@ func FinalizeChatCompletionsAnthropicStream(state *ChatCompletionsToAnthropicStr
 				CacheReadInputTokens:            state.CacheReadInputTokens,
 				CacheCreationInputTokens:        state.CacheCreationInputTokens,
 				CacheCreationInputTokensPresent: true,
+				CacheReadInputTokensPresent:     true,
 			},
 		},
 		AnthropicStreamEvent{Type: "message_stop"},
@@ -808,7 +811,7 @@ func ensureCCAnthropicMessageStart(state *ChatCompletionsToAnthropicStreamState)
 			Content:    []AnthropicContentBlock{},
 			Model:      state.Model,
 			StopReason: nil, // JSON null; never ""
-			Usage:      AnthropicUsage{InputTokens: 0, OutputTokens: 0},
+			Usage:      chatUsageToAnthropicUsage(nil),
 		},
 	}}
 }
