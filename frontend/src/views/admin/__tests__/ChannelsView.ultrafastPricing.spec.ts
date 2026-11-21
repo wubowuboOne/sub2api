@@ -20,6 +20,11 @@ vi.mock('@/api/admin/channels', () => ({
   default: { getModelDefaultPricing: vi.fn().mockResolvedValue({ found: false }) }
 }))
 vi.mock('@/stores/app', () => ({ useAppStore: () => ({ showSuccess: vi.fn(), showError }) }))
+vi.mock('@/stores/auth', () => ({ useAuthStore: () => ({ user: null }) }))
+vi.mock('vue-router', async () => ({
+  ...await vi.importActual<typeof import('vue-router')>('vue-router'),
+  useRoute: () => ({ query: {} })
+}))
 vi.mock('vue-i18n', async () => ({
   ...await vi.importActual<typeof import('vue-i18n')>('vue-i18n'),
   useI18n: () => ({ t: (key: string) => key })
@@ -41,7 +46,7 @@ function mountView() {
           template: '<div v-for="row in data" :key="row.id"><slot name="cell-actions" :row="row" /></div>'
         }),
         Pagination: true, ConfirmDialog: true, EmptyState: true,
-        Select: true, Icon: true, PlatformIcon: true
+        Select: true, Icon: true, PlatformIcon: true, RouterLink: true, NewFeatureBadge: true
       }
     }
   })

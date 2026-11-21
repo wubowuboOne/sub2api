@@ -463,7 +463,7 @@ func TestGatewayAnthropicStopSequenceDisconnectPreservesUsage(t *testing.T) {
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(body))
 	c.Writer = &failWriteResponseWriter{ResponseWriter: c.Writer}
 	result, err := svc.forwardAnthropicAPIKeyPassthrough(context.Background(), c, newAnthropicAPIKeyAccountForTest(), body, "claude-sonnet-4-20250514", "claude-sonnet-4-20250514", true, time.Now())
-	require.NoError(t, err)
+	require.ErrorIs(t, err, context.Canceled)
 	require.True(t, result.ClientDisconnect)
 	require.Equal(t, 9, result.Usage.OutputTokens)
 }

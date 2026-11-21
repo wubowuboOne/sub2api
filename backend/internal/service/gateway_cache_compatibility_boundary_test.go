@@ -43,7 +43,9 @@ func TestAnthropicConverterOutputCacheFields(t *testing.T) {
 				payload := `{"id":"chat_cache","choices":[{"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]` + test.chatUsage + `}`
 				if strings.HasPrefix(route, "responses") {
 					payload = "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_cache\",\"model\":\"gpt-5.4\"}}\n\n"
-					if !strings.HasSuffix(route, "eof") {
+					if strings.HasSuffix(route, "eof") {
+						payload += `data: {"type":"response.output_text.delta","output_index":0,"content_index":0,"delta":"ok"}` + "\n\n"
+					} else {
 						payload += `data: {"type":"response.completed","response":{"id":"resp_cache","status":"completed","output":[]` + test.responsesUsage + `}}` + "\n\n"
 					}
 				} else if !strings.HasSuffix(route, "buffered") {
@@ -61,9 +63,9 @@ func TestAnthropicConverterOutputCacheFields(t *testing.T) {
 				var err error
 				switch route {
 				case "chat buffered":
-					result, err = service.bufferChatCompletionsAsAnthropic(ctx, response, "gpt-5.4", "gpt-5.4", "gpt-5.4", nil, nil, time.Now())
+					result, err = service.bufferChatCompletionsAsAnthropic(ctx, response, rawChatCompletionsTestAccount(), "gpt-5.4", "gpt-5.4", "gpt-5.4", nil, nil, time.Now())
 				case "chat terminal", "chat eof":
-					result, err = service.streamChatCompletionsAsAnthropic(ctx, response, "gpt-5.4", "gpt-5.4", "gpt-5.4", nil, nil, time.Now())
+					result, err = service.streamChatCompletionsAsAnthropic(ctx, response, rawChatCompletionsTestAccount(), "gpt-5.4", "gpt-5.4", "gpt-5.4", nil, nil, time.Now())
 				case "responses buffered":
 					result, err = service.handleAnthropicBufferedStreamingResponse(response, ctx, rawChatCompletionsTestAccount(), "gpt-5.4", "gpt-5.4", "gpt-5.4", time.Now())
 				default:

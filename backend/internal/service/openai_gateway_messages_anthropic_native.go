@@ -602,7 +602,10 @@ func (s *OpenAIGatewayService) relayAnthropicStream(ctx context.Context, resp *h
 					markDisconnected()
 				}
 				status.readErr = ev.err
-				if handlePeerReset && !clientDisconnected && !status.sawTerminal {
+				if handlePeerReset && !clientDisconnected {
+					if status.sawTerminal {
+						MarkResponseCommitted(c)
+					}
 					if resetErr, handled := handleOpenAIStreamTransportReset(c, account, resp.Header.Get("x-request-id"), ev.err); handled {
 						return result(), resetErr
 					}

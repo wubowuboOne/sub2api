@@ -716,6 +716,13 @@ func TestAnthropicCacheOnlyBufferedSSEUsage(t *testing.T) {
 						}
 					}
 					require.Equal(t, test.wantAggregate, aggregate)
+					if terminal == "eof" {
+						require.EqualError(t, err, "stream usage incomplete: missing terminal event")
+						require.Equal(t, http.StatusBadGateway, recorder.Code)
+						require.Contains(t, recorder.Body.String(), "upstream stream ended without a terminal event")
+						return
+					}
+					require.NoError(t, err)
 					require.Equal(t, http.StatusOK, recorder.Code)
 					require.True(t, json.Valid(recorder.Body.Bytes()))
 					inputPath := "usage.input_tokens"
