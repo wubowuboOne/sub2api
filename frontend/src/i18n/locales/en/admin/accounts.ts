@@ -984,7 +984,7 @@ export default {
           'Disabled by default. Enable only when this account\'s upstream charges OpenAI API long-context rates above the model threshold.',
         ultrafastBilling: 'UltraFast tier billing',
         ultrafastBillingDesc:
-          'Disabled by default. When enabled, read service_tier from upstream responses; every model on this account uses its standard price ×6 for ultrafast, including cache reads and writes, then applies account/group multipliers. If the response omits the tier, bill the requested tier. Explicit ultrafast requests that settle at that tier are billed at 6× even with this switch off. This does not force UltraFast upstream.',
+          'Reads service_tier from upstream responses when enabled. The settled ultrafast tier uses the standard model price and the applicable UltraFast multiplier, including cache reads and writes, before account and group multipliers. This same rate applies to explicit requests that settle at ultrafast.',
         responsesWebsocketsV2: 'Responses WebSocket v2',
         responsesWebsocketsV2Desc:
           'Disabled by default. Enable to allow responses_websockets_v2 capability (still gated by global and account-type switches).',

@@ -160,17 +160,17 @@ func (usage OpenAIUsage) billingUsageTokens() UsageTokens {
 		creationTokens = max(usage.CacheCreation5mTokens, 0) + max(usage.CacheCreation1hTokens, 0)
 	}
 	tokens := UsageTokens{
-		InputTokens:           max(usage.InputTokens-usage.CacheReadInputTokens-creationTokens, 0),
-		ImageInputTokens:      max(usage.ImageInputTokens-usage.ImageCacheReadTokens, 0),
-		ImageCacheReadTokens:  usage.ImageCacheReadTokens,
-		OutputTokens:          usage.OutputTokens,
-		CacheCreationTokens:   creationTokens,
-		CacheCreation5mTokens: usage.CacheCreation5mTokens,
-		CacheCreation1hTokens: usage.CacheCreation1hTokens,
+		InputTokens:            max(usage.InputTokens-usage.CacheReadInputTokens-creationTokens, 0),
+		ImageInputTokens:       max(usage.ImageInputTokens-usage.ImageCacheReadTokens, 0),
+		ImageCacheReadTokens:   usage.ImageCacheReadTokens,
+		OutputTokens:           usage.OutputTokens,
+		CacheCreationTokens:    creationTokens,
+		CacheCreation5mTokens:  usage.CacheCreation5mTokens,
+		CacheCreation1hTokens:  usage.CacheCreation1hTokens,
 		CacheCreation30mTokens: usage.CacheCreation30mInputTokens,
 		CacheCreation12hTokens: usage.CacheCreation12hInputTokens,
-		CacheReadTokens:       usage.CacheReadInputTokens,
-		ImageOutputTokens:     usage.ImageOutputTokens,
+		CacheReadTokens:        usage.CacheReadInputTokens,
+		ImageOutputTokens:      usage.ImageOutputTokens,
 	}
 	return tokens
 }
@@ -290,7 +290,7 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 		serviceTier = strings.TrimSpace(*result.ServiceTier)
 	}
 	longContextBillingGate := openAILongContextBillingGate(billingAccount)
-	modelLongContextExempt := openAIGPT61SolLongContextExempt(billingAccount, result, tokens)
+	modelLongContextExempt := openAIGPT62SubscriptionLongContextExempt(billingAccount, result) || openAIGPT61SolLongContextExempt(billingAccount, result, tokens)
 	cost, err = s.calculateOpenAIRecordUsageCost(
 		ctx,
 		result,
@@ -468,11 +468,11 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 		UpstreamEndpoint:         optionalTrimmedStringPtr(input.UpstreamEndpoint),
 		InputTokens:              actualInputTokens,
 		OutputTokens:             result.Usage.OutputTokens,
-		CacheCreationTokens: billingUsage.CacheCreationInputTokens,
-		CacheCreation5mTokens: billingUsage.CacheCreation5mTokens,
-		CacheCreation1hTokens: billingUsage.CacheCreation1hTokens,
-		CacheCreation30mTokens: billingUsage.CacheCreation30mInputTokens,
-		CacheCreation12hTokens: billingUsage.CacheCreation12hInputTokens,
+		CacheCreationTokens:      billingUsage.CacheCreationInputTokens,
+		CacheCreation5mTokens:    billingUsage.CacheCreation5mTokens,
+		CacheCreation1hTokens:    billingUsage.CacheCreation1hTokens,
+		CacheCreation30mTokens:   billingUsage.CacheCreation30mInputTokens,
+		CacheCreation12hTokens:   billingUsage.CacheCreation12hInputTokens,
 		CacheReadTokens:          result.Usage.CacheReadInputTokens,
 		ImageInputTokens:         result.Usage.ImageInputTokens,
 		ImageOutputTokens:        result.Usage.ImageOutputTokens,
@@ -654,6 +654,18 @@ func openAILongContextBillingGate(account *Account) *bool {
 	}
 	enabled := account.IsOpenAILongContextBillingEnabled()
 	return &enabled
+}
+
+// Use the transmitted model and actual subscription credentials for the exemption.
+func openAIGPT62SubscriptionLongContextExempt(account *Account, result *OpenAIForwardResult) bool {
+	if result == nil || !account.IsOpenAIOAuthLike() {
+		return false
+	}
+	model := strings.TrimSpace(result.UpstreamModel)
+	if model == "" {
+		model = result.Model
+	}
+	return isOpenAIGPT62SolOrAstra(model)
 }
 
 // openAIGPT61SolSubscriptionLongContextThreshold 是订阅凭据的长上下文门槛。
@@ -870,13 +882,11 @@ func (s *OpenAIGatewayService) calculateOpenAIRecordUsageTokenCost(
 			DisableModelLongContextPricing: modelLongContextExempt,
 		})
 	}
-	return s.billingService.calculateCostWithServiceTierPolicy(
-		billingModel,
-		tokens,
-		multiplier,
-		serviceTier,
-		(longContextBillingGate == nil || *longContextBillingGate) && !modelLongContextExempt,
-	)
+	return s.billingService.CalculateCostUnified(CostInput{
+		Ctx: ctx, Model: billingModel, Tokens: tokens, RequestCount: 1, RateMultiplier: multiplier,
+		PricingAt: pricingAt, ServiceTier: serviceTier, LongContextBillingEnabled: longContextBillingGate,
+		DisableModelLongContextPricing: modelLongContextExempt,
+	})
 }
 
 func (s *OpenAIGatewayService) calculateOpenAIImageCost(

@@ -94,46 +94,57 @@ func TestFreeUltrafastMixedCacheAndLongContext(t *testing.T) {
 			name = "long"
 			ordinary = 272001
 		}
-		t.Run(name, func(t *testing.T) {
-			repo := &openAIRecordUsageLogRepoStub{inserted: true}
-			svc := newOpenAIRecordUsageServiceForTest(repo, &openAIRecordUsageUserRepoStub{}, &openAIRecordUsageSubRepoStub{}, nil)
-			svc.billingService = NewBillingService(svc.cfg, &PricingService{pricingData: map[string]*LiteLLMModelPricing{
-				"gpt-6.2-astra": {InputCostPerToken: 10e-6, OutputCostPerToken: 50e-6, CacheCreationInputTokenCost: 12.5e-6, CacheReadInputTokenCost: 1e-6, LongContextInputTokenThreshold: 272000, LongContextInputCostMultiplier: 2, LongContextOutputCostMultiplier: 1.5},
-			}})
-			svc.resolver = NewModelPricingResolver(nil, svc.billingService)
-			in, out, write, write12h, read := 10e-6, 50e-6, 12.5e-6, 25e-6, 1e-6
-			group := &Group{ID: 77, Platform: PlatformOpenAI, Hydrated: true, RateMultiplier: .6, LongContextPricingEnabled: true,
-				ModelPricing: []ChannelModelPricing{{Models: []string{"gpt-6.2-astra"}, BillingMode: BillingModeToken, InputPrice: &in, OutputPrice: &out, CacheWritePrice: &write, CacheWrite12hPrice: &write12h, CacheReadPrice: &read}}}
-			require.NoError(t, json.Unmarshal([]byte(`{"FreeOpenAIUltrafast":true}`), group))
-			tier := "ultrafast"
-			err := svc.RecordUsage(context.Background(), &OpenAIRecordUsageInput{
-				Result: &OpenAIForwardResult{RequestID: "synthetic-ultra-cache-" + name, Model: "gpt-6.2-astra", ServiceTier: &tier, Duration: time.Second,
-					Usage: OpenAIUsage{InputTokens: ordinary + 11 + 13 + 17, OutputTokens: 19, CacheCreationInputTokens: 24, CacheCreation30mInputTokens: 11, CacheCreation12hInputTokens: 13, CacheReadInputTokens: 17}},
-				APIKey: &APIKey{ID: 1020, GroupID: &group.ID, Group: group}, User: &User{ID: 2020}, Account: &Account{ID: 3020, Platform: PlatformOpenAI, Type: AccountTypeAPIKey}})
-			require.NoError(t, err)
-			log := repo.lastLog
-			require.NotNil(t, log)
-			inputFactor, outputFactor := 1.0, 1.0
-			if long {
-				inputFactor = 2
-				outputFactor = 1.5
-			}
-			standard := (float64(ordinary)*in+11*write+13*write12h+17*read)*inputFactor + 19*out*outputFactor
-			require.InDelta(t, standard*6, log.TotalCost, 1e-9)
-			require.Equal(t, QuantizeUsageBillingAmount(standard*.6), log.ActualCost)
-			var saved struct{ CustomerCostDetails map[string]any }
-			encoded, err := json.Marshal(log)
-			require.NoError(t, err)
-			require.NoError(t, json.Unmarshal(encoded, &saved))
-			detail := saved.CustomerCostDetails
-			require.NotNil(t, detail)
-			require.Equal(t, true, detail["free_ultrafast"])
-			require.EqualValues(t, 2, detail["version"])
-			require.Len(t, detail["cache_cost_details"], 3)
-			require.InDelta(t, (11*write+13*write12h)*inputFactor, detail["cache_creation_cost"], 1e-12)
-			require.InDelta(t, 17*read*inputFactor, detail["cache_read_cost"], 1e-12)
-			require.Equal(t, long, log.LongContextBillingApplied)
-		})
+		cutoff := time.Date(2027, time.March, 1, 8, 0, 0, 0, time.UTC)
+		for _, test := range []struct {
+			name   string
+			at     time.Time
+			factor float64
+		}{
+			{"promotion", cutoff.Add(-time.Second), 3},
+			{"standard", cutoff, 6},
+		} {
+			t.Run(name+"/"+test.name, func(t *testing.T) {
+				repo := &openAIRecordUsageLogRepoStub{inserted: true}
+				svc := newOpenAIRecordUsageServiceForTest(repo, &openAIRecordUsageUserRepoStub{}, &openAIRecordUsageSubRepoStub{}, nil)
+				svc.billingService = NewBillingService(svc.cfg, &PricingService{pricingData: map[string]*LiteLLMModelPricing{
+					"gpt-6.2-astra": {InputCostPerToken: 10e-6, OutputCostPerToken: 50e-6, CacheCreationInputTokenCost: 12.5e-6, CacheReadInputTokenCost: 1e-6, LongContextInputTokenThreshold: 272000, LongContextInputCostMultiplier: 2, LongContextOutputCostMultiplier: 1.5},
+				}})
+				svc.resolver = NewModelPricingResolver(nil, svc.billingService)
+				in, out, write, write12h, read := 10e-6, 50e-6, 12.5e-6, 25e-6, 1e-6
+				group := &Group{ID: 77, Platform: PlatformOpenAI, Hydrated: true, RateMultiplier: .6, LongContextPricingEnabled: true,
+					ModelPricing: []ChannelModelPricing{{Models: []string{"gpt-6.2-astra"}, BillingMode: BillingModeToken, InputPrice: &in, OutputPrice: &out, CacheWritePrice: &write, CacheWrite12hPrice: &write12h, CacheReadPrice: &read}}}
+				require.NoError(t, json.Unmarshal([]byte(`{"FreeOpenAIUltrafast":true}`), group))
+				tier := "ultrafast"
+				err := svc.RecordUsage(context.Background(), &OpenAIRecordUsageInput{
+					Result: &OpenAIForwardResult{RequestID: "synthetic-ultra-cache-" + t.Name(), Model: "gpt-6.2-astra", ServiceTier: &tier, Duration: time.Second,
+						Usage: OpenAIUsage{InputTokens: ordinary + 11 + 13 + 17, OutputTokens: 19, CacheCreationInputTokens: 24, CacheCreation30mInputTokens: 11, CacheCreation12hInputTokens: 13, CacheReadInputTokens: 17}},
+					PricingAt: test.at,
+					APIKey:    &APIKey{ID: 1020, GroupID: &group.ID, Group: group}, User: &User{ID: 2020}, Account: &Account{ID: 3020, Platform: PlatformOpenAI, Type: AccountTypeAPIKey}})
+				require.NoError(t, err)
+				log := repo.lastLog
+				require.NotNil(t, log)
+				inputFactor, outputFactor := 1.0, 1.0
+				if long {
+					inputFactor = 2
+					outputFactor = 1.5
+				}
+				standard := (float64(ordinary)*in+11*write+13*write12h+17*read)*inputFactor + 19*out*outputFactor
+				require.InDelta(t, standard*test.factor, log.TotalCost, 1e-9)
+				require.Equal(t, QuantizeUsageBillingAmount(standard*.6), log.ActualCost)
+				var saved struct{ CustomerCostDetails map[string]any }
+				encoded, err := json.Marshal(log)
+				require.NoError(t, err)
+				require.NoError(t, json.Unmarshal(encoded, &saved))
+				detail := saved.CustomerCostDetails
+				require.NotNil(t, detail)
+				require.Equal(t, true, detail["free_ultrafast"])
+				require.EqualValues(t, 2, detail["version"])
+				require.Len(t, detail["cache_cost_details"], 3)
+				require.InDelta(t, (11*write+13*write12h)*inputFactor, detail["cache_creation_cost"], 1e-12)
+				require.InDelta(t, 17*read*inputFactor, detail["cache_read_cost"], 1e-12)
+				require.Equal(t, long, log.LongContextBillingApplied)
+			})
+		}
 	}
 }
 
