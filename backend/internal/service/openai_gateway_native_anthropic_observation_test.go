@@ -108,7 +108,7 @@ func TestNativeAnthropicResponseObservationReachesUsage(t *testing.T) {
 			beginUpstreamResponseModelObservation(c).Observe("stale-model", false)
 			account := nativeAnthropicTestAccount()
 			result, err := svc.ForwardAsAnthropic(context.Background(), c, account, body, "", "k3")
-			if tt.partial {
+			if tt.partial || tt.disconnect {
 				require.Error(t, err)
 			} else {
 				require.NoError(t, err)
@@ -121,7 +121,7 @@ func TestNativeAnthropicResponseObservationReachesUsage(t *testing.T) {
 			require.Equal(t, 20, result.Usage.InputTokens)
 			wantOutput := 10
 			if tt.partial {
-				wantOutput = 0
+				wantOutput = 1
 			}
 			require.Equal(t, wantOutput, result.Usage.OutputTokens)
 			require.Equal(t, tt.disconnect, result.ClientDisconnect)
@@ -142,7 +142,12 @@ func TestNativeAnthropicResponseObservationReachesUsage(t *testing.T) {
 					expected, err = sjson.Set(wire, "model", "client-model")
 					require.NoError(t, err)
 				}
-				require.Equal(t, expected, rec.Body.String(), "only the public model declaration may change")
+				if tt.partial {
+					require.True(t, strings.HasPrefix(rec.Body.String(), expected))
+					require.Contains(t, rec.Body.String(), "event: error")
+				} else {
+					require.Equal(t, expected, rec.Body.String(), "only the public model declaration may change")
+				}
 			}
 			require.Equal(t, tt.wantModel, observedUpstreamResponseModel(c), "the observer already saw the declaration")
 
