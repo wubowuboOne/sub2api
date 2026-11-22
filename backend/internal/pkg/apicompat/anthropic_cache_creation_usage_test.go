@@ -16,7 +16,7 @@ func TestChatCacheWritePresenceAcrossAnthropicConverters(t *testing.T) {
 	}{
 		{"missing write falls back", `"cache_creation_tokens":4`, 4},
 		{"zero write is authoritative", `"cache_write_tokens":0,"cache_creation_tokens":4`, 0},
-		{"null write is authoritative", `"cache_write_tokens":null,"cache_creation_tokens":4`, 0},
+		{"null write falls back", `"cache_write_tokens":null,"cache_creation_tokens":4`, 4},
 		{"negative write clamps", `"cache_write_tokens":-2,"cache_creation_tokens":4`, 0},
 		{"positive write wins", `"cache_write_tokens":2,"cache_creation_tokens":4`, 2},
 	} {

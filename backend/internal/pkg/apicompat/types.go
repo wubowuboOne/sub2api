@@ -1025,16 +1025,14 @@ func (details *ChatTokenDetails) UnmarshalJSON(data []byte) error {
 	type detailsAlias ChatTokenDetails
 	var decoded struct {
 		detailsAlias
-		CacheWriteTokens json.RawMessage `json:"cache_write_tokens"`
+		CacheWriteTokens *int `json:"cache_write_tokens"`
 	}
 	if err := json.Unmarshal(data, &decoded); err != nil {
 		return err
 	}
 	*details = ChatTokenDetails(decoded.detailsAlias)
-	if len(decoded.CacheWriteTokens) != 0 {
-		if err := json.Unmarshal(decoded.CacheWriteTokens, &details.CacheWriteTokens); err != nil {
-			return err
-		}
+	if decoded.CacheWriteTokens != nil {
+		details.CacheWriteTokens = *decoded.CacheWriteTokens
 		details.cacheWriteTokensPresent = true
 	}
 	return nil
