@@ -83,21 +83,34 @@ func TestOpenAIChatConfiguredRetryReadFailures(t *testing.T) {
 					result, err := (&OpenAIGatewayService{cfg: cfg}).handleChatStreamingResponse(resp, c, newConfiguredStreamRetryAccount(), "gpt-5.6-terra", "gpt-5.6-terra", "gpt-6-luna", time.Now(), 32)
 					var failover *UpstreamFailoverError
 					if failure.name == "http2_reset" {
-						// A verified peer reset can follow a consumed POST. Preserve
-						// its new no-replay transport contract, even in a 502 pool.
-						require.NotErrorAs(t, err, &failover)
-						code, _, classified := OpenAIUpstreamStreamReadErrorDetails(err)
-						require.True(t, classified)
-						require.Equal(t, OpenAIUpstreamHTTP2StreamErrorCode, code)
-						require.NotNil(t, result)
-						require.Contains(t, rec.Body.String(), "PROTOCOL_ERROR")
+						// An explicitly configured API-key pool retries only its owner;
+						// the handler writes the terminal transport error on exhaustion.
+						require.ErrorAs(t, err, &failover)
+						require.Equal(t, http.StatusBadGateway, failover.StatusCode)
+						require.True(t, failover.RetryableOnSameAccount)
+						require.True(t, failover.ConfiguredStreamRetry)
+						require.True(t, failover.RequestScopedTransient)
+						require.False(t, failover.ShouldRetryNextAccount())
+						require.False(t, failover.ShouldReportAccountScheduleFailure())
+						require.NotNil(t, failover.TransportFailure)
+						require.Equal(t, "PROTOCOL_ERROR", failover.TransportFailure.ResetReason)
+						require.Equal(t, output == "text", failover.RetryAfterOutput)
+						_, marked := GetOpsStreamError(c)
+						require.False(t, marked, "an intermediate retry is not a terminal failure")
 						if output != "text" {
-							for _, staged := range []string{"private answer", "private reasoning", "lookup"} {
-								require.NotContains(t, rec.Body.String(), staged)
-							}
+							require.Nil(t, result, "a discarded attempt must not produce a billable result")
+							require.False(t, c.Writer.Written())
+							require.Empty(t, rec.Body.String())
 						} else {
-							require.Contains(t, rec.Body.String(), map[string]string{"reasoning": "private reasoning", "tool": "lookup", "text": "private answer"}[output])
+							require.NotNil(t, result)
+							require.Contains(t, rec.Body.String(), "private answer")
 						}
+						require.True(t, WriteOpenAIStreamTransportFailure(c, failover))
+						terminal := rec.Body.String()
+						require.Contains(t, terminal, "PROTOCOL_ERROR")
+						require.Contains(t, terminal, OpenAIUpstreamHTTP2StreamErrorCode)
+						require.True(t, WriteOpenAIStreamTransportFailure(c, failover))
+						require.Equal(t, terminal, rec.Body.String(), "exhaustion must be delivered only once")
 						ops, marked := GetOpsStreamError(c)
 						require.True(t, marked)
 						require.NotNil(t, ops.TransportFailure)

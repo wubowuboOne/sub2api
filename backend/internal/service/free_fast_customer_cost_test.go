@@ -108,6 +108,7 @@ func TestFreeFastCustomerCostVariants(t *testing.T) {
 			// Group token cards deliberately ignore custom intervals. Exercise
 			// the real catalogue whole-request tier and its group gate instead;
 			// the disabled case must stay at base rates despite these intervals.
+			// Use API credentials: GPT-6.2 subscription credentials are exempt.
 			resolved := svc.resolver.Resolve(context.Background(), PricingInput{Model: "gpt-6.2-astra", GroupID: &gid, Group: group})
 			require.Equal(t, PricingSourceGroup, resolved.Source)
 			require.Empty(t, resolved.Intervals)
@@ -118,7 +119,8 @@ func TestFreeFastCustomerCostVariants(t *testing.T) {
 						OutputTokens: tc.output, CacheCreationInputTokens: tc.write30m + tc.write12h,
 						CacheCreation30mInputTokens: tc.write30m, CacheCreation12hInputTokens: tc.write12h, CacheReadInputTokens: tc.read}},
 				APIKey: &APIKey{ID: 1020, GroupID: &gid, Group: group}, User: &User{ID: 2020},
-				Account: &Account{ID: 3020, Platform: PlatformOpenAI, Type: AccountTypeOAuth},
+				Account: &Account{ID: 3020, Platform: PlatformOpenAI, Type: AccountTypeAPIKey,
+					Extra: map[string]any{openAILongContextBillingEnabledKey: !tc.contextDisabled}},
 			})
 			require.NoError(t, err)
 			log := repo.lastLog
