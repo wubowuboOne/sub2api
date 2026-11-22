@@ -169,6 +169,17 @@ class SelectionTests(unittest.TestCase):
 
 
 class WiringTests(unittest.TestCase):
+    def test_go_module_download_changes_run_shell_regression(self):
+        config = json.loads((REPO / '.github/ci/scopes.json').read_text())
+        patterns = config['backend-ci.yml']['shell']
+        for path in ['Dockerfile', 'deploy/Dockerfile', 'backend/Dockerfile',
+                     'backend/scripts/download-modules.sh', 'deploy/build_image.sh',
+                     'deploy/tests/go-module-download-test.sh']:
+            self.assertTrue(ci.matches(path, patterns), path)
+        workflow = yaml.safe_load((REPO / '.github/workflows/backend-ci.yml').read_text())
+        commands = '\n'.join(step.get('run', '') for step in workflow['jobs']['shell']['steps'])
+        self.assertIn('/bin/sh deploy/tests/go-module-download-test.sh', commands)
+
     def test_workflow_outputs_scopes_and_conditions_are_consistent(self):
         config = json.loads((REPO / '.github/ci/scopes.json').read_text())
         for filename, scopes in config.items():

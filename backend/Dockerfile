@@ -8,9 +8,10 @@ RUN apk add --no-cache git
 # 复制go.mod和go.sum
 COPY go.mod go.sum ./
 COPY third_party ./third_party
+COPY scripts/download-modules.sh ./scripts/download-modules.sh
 
 # 下载依赖
-RUN go mod download
+RUN sh ./scripts/download-modules.sh
 
 # 复制源代码
 COPY . .

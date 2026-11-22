@@ -9,7 +9,7 @@
 ARG NODE_IMAGE=node:24-alpine
 ARG GOLANG_IMAGE=golang:1.27.4-alpine
 ARG ALPINE_IMAGE=alpine:3.20
-ARG GOPROXY=https://goproxy.cn,direct
+ARG GOPROXY=https://goproxy.cn|https://proxy.golang.org|direct
 ARG GOSUMDB=sum.golang.google.cn
 
 # -----------------------------------------------------------------------------
@@ -60,7 +60,8 @@ WORKDIR /app/backend
 # Copy go mod files first (better caching)
 COPY backend/go.mod backend/go.sum ./
 COPY backend/third_party ./third_party
-RUN go mod download
+COPY backend/scripts/download-modules.sh ./scripts/download-modules.sh
+RUN sh ./scripts/download-modules.sh
 
 # Copy backend source first
 COPY backend/ ./

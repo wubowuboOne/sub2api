@@ -11,7 +11,7 @@ ARG NODE_IMAGE=node:24-alpine
 ARG GOLANG_IMAGE=golang:1.27.4-alpine
 ARG ALPINE_IMAGE=alpine:3.21
 ARG POSTGRES_IMAGE=postgres:18-alpine
-ARG GOPROXY=https://goproxy.cn,direct
+ARG GOPROXY=https://goproxy.cn|https://proxy.golang.org|direct
 ARG GOSUMDB=sum.golang.google.cn
 ARG NPM_CONFIG_REGISTRY=
 
@@ -73,10 +73,11 @@ WORKDIR /app/backend
 # Copy go mod files first (better caching)
 COPY backend/go.mod backend/go.sum ./
 COPY backend/third_party ./third_party
+COPY backend/scripts/download-modules.sh ./scripts/download-modules.sh
 # Cache mount keeps the module cache across builds so a transient CDN blip on
 # retry resumes instead of re-fetching every zip from scratch.
 RUN --mount=type=cache,id=sub2api-gomod,target=/go/pkg/mod \
-    go mod download
+    sh ./scripts/download-modules.sh
 
 # Copy backend source first
 COPY backend/ ./

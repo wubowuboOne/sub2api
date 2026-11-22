@@ -1,6 +1,8 @@
 {
   "backend-ci.yml": {
     "shell": [
+      "backend/scripts/download-modules.sh",
+      "backend/Dockerfile",
       "deploy/*.sh",
       "deploy/tests/*.sh",
       "deploy/docker-compose*",
