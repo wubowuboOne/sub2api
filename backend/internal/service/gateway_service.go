@@ -851,7 +851,7 @@ const OpenAIWSModelUnavailableReason GatewayFailureReason = "openai_ws_model_una
 // except an Excel BPS 429, which only cools the account's BPS route, and a
 // local BPS image admission rejection, which never reached the upstream.
 func (e *UpstreamFailoverError) ShouldReportAccountScheduleFailure() bool {
-	if e == nil || e.TransportFailure != nil || e.Reason == OpenAIWSModelUnavailableReason || e.Reason == ExcelBPSRateLimitedReason || e.Reason == GrokUnknownForbiddenReason || e.Reason == OpenAIEncryptedContentRetryReason || e.IsExcelBPSImageAdmissionRejection() {
+	if e == nil || e.TransportFailure != nil || e.Reason == OpenAIWSModelUnavailableReason || e.Reason == ExcelBPSRateLimitedReason || e.Reason == GrokUnknownForbiddenReason || e.Reason == OpenAIEncryptedContentRetryReason || e.Reason == OpenAIAgentHTTP429RetryReason || e.IsExcelBPSImageAdmissionRejection() {
 		return false
 	}
 	return !e.IsCredentialFailure() || e.Scope == GatewayFailureScopeAccount

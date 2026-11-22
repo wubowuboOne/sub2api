@@ -2973,12 +2973,16 @@ func (s *OpenAIGatewayService) selectAccountWithSchedulerOnce(
 	}
 	platform = NormalizeOpenAICompatiblePlatform(platform)
 	decision := OpenAIAccountScheduleDecision{}
-	if accountID := OpenAIStreamRetryAccountID(ctx); accountID > 0 {
+	retryAccountID := OpenAIStreamRetryAccountID(ctx)
+	if retryAccountID == 0 {
+		retryAccountID = openAIAgentHTTP429RetryAccountID(ctx)
+	}
+	if accountID := retryAccountID; accountID > 0 {
 		if s.checkChannelPricingRestriction(ctx, groupID, requestedModel) {
 			return nil, decision, ErrNoAvailableAccounts
 		}
 		// Reuse the normal bound-account checks and concurrency acquisition, but
-		// never escape to another account after downstream content was delivered.
+		// never escape to another account for a route-pinned retry.
 		retryScheduler := &defaultOpenAIAccountScheduler{service: s, stats: newOpenAIAccountRuntimeStats()}
 		retryObservation := priorityObservationFromContext(ctx, requestedModel)
 		effort, effortScoped := observationEffort(ctx)

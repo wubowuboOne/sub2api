@@ -1546,8 +1546,8 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			respBody = s.redactAgentIdentitySensitiveBody(ctx, account, respBody)
 			resp.Body = io.NopCloser(bytes.NewReader(respBody))
 			// Configured pool retries preserve the original encrypted payload.
-			// A preserved-history attempt or an applied 400 recovery must retain
-			// its stricter one-attempt budget; the opt-in recovery below owns it.
+			// Preserved-history requests keep their stricter retry policy below;
+			// the explicit 400 recovery owns its separate one-attempt budget.
 			if !openAIAgentRecoveryPreservesHistory(ctx) {
 				if retry := newOpenAIEncryptedContentRetryError(c, account, resp.StatusCode, resp.Header, respBody, false); retry != nil {
 					return nil, retry
@@ -1580,6 +1580,9 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 				return s.handleErrorResponse(ctx, resp, c, account, body, resolveOpenAIErrorSchedulingModel(billingModel, upstreamModel))
 			}
 			if openAIAgentRecoveryPreservesHistory(ctx) {
+				if retry := s.newOpenAIAgentHTTP429RetryError(ctx, c, account, upstreamReq, resp, respBody); retry != nil {
+					return nil, retry
+				}
 				return s.handleErrorResponse(ctx, resp, c, account, body, resolveOpenAIErrorSchedulingModel(billingModel, upstreamModel))
 			}
 			if retryBody, reason, changed, retryErr := normalizeOpenAIResponsesRejectedFieldRetryBody(resp.StatusCode, body, respBody); retryErr != nil {

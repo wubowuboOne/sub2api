@@ -1383,11 +1383,12 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 						h.gatewayService.ReportOpenAIAccountScheduleResult(account, openAIAccountScheduleModel(c, account, forwardModel, requireCompact, nil), false, nil, err)
 					}
 					agentToolResult := service.OpenAIAgentToolResultContinuation(c.Request.Context())
-					if service.OpenAIAgentRecoveryPreservesHistory(c.Request.Context()) {
+					agentHTTP429Retry := failoverErr.Reason == service.OpenAIAgentHTTP429RetryReason
+					if service.OpenAIAgentRecoveryPreservesHistory(c.Request.Context()) && !agentHTTP429Retry {
 						h.handleFailoverExhausted(c, failoverErr, streamStarted)
 						return
 					}
-					if !failoverErr.RetryAfterOutput && failoverErr.TransportFailure == nil && failoverErr.Reason != service.OpenAIEncryptedContentRetryReason && !forbiddenBudget.canRetry(failoverErr, switchCount) {
+					if !agentHTTP429Retry && !failoverErr.RetryAfterOutput && failoverErr.TransportFailure == nil && failoverErr.Reason != service.OpenAIEncryptedContentRetryReason && !forbiddenBudget.canRetry(failoverErr, switchCount) {
 						h.handleFailoverExhausted(c, failoverErr, streamStarted)
 						return
 					}
