@@ -183,7 +183,7 @@ func (s *OpenAIGatewayService) forwardAsAnthropic(
 	}
 	compatContinuationEnabled := openAICompatContinuationEnabled(account, upstreamModel)
 	previousResponseID := ""
-	if compatContinuationEnabled {
+	if compatContinuationEnabled && ctx.Value(openAIMessagesContinuationRetryKey{}) == nil {
 		previousResponseID = s.getOpenAICompatSessionResponseID(ctx, c, account, promptCacheKey)
 	}
 	compatTurnState := ""
@@ -528,6 +528,29 @@ func (s *OpenAIGatewayService) forwardAsAnthropic(
 		)
 	}
 	defer func() { _ = resp.Body.Close() }()
+	retryWithoutContinuation := func(unsupported bool) (*OpenAIForwardResult, error) {
+		if unsupported {
+			s.disableOpenAICompatSessionContinuation(ctx, c, account, promptCacheKey)
+		} else {
+			s.deleteOpenAICompatSessionResponseID(ctx, c, account, promptCacheKey)
+		}
+		_ = resp.Body.Close()
+		if openAIStreamClientCanceled(c) {
+			return nil, c.Request.Context().Err()
+		}
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		logger.L().Info("openai messages: previous_response_id unavailable, retrying without continuation",
+			zap.Int64("account_id", account.ID),
+			zap.String("previous_response_id", truncateOpenAIWSLogValue(previousResponseID, openAIWSIDValueMaxLen)),
+			zap.String("upstream_model", upstreamModel),
+		)
+		// Another turn may update the session binding while this request repairs
+		// itself. Never attach that binding or recurse again during this replay.
+		retryCtx := context.WithValue(ctx, openAIMessagesContinuationRetryKey{}, true)
+		return s.ForwardAsAnthropic(retryCtx, c, account, body, promptCacheKey, defaultMappedModel)
+	}
 
 	// 8. Handle error response with failover
 	if resp.StatusCode >= 400 {
@@ -540,17 +563,7 @@ func (s *OpenAIGatewayService) forwardAsAnthropic(
 			return s.ForwardAsAnthropic(markAgentIdentityTaskRecoveryTried(ctx), c, account, body, promptCacheKey, defaultMappedModel)
 		}
 		if previousResponseID != "" && (isOpenAICompatPreviousResponseNotFound(resp.StatusCode, upstreamMsg, respBody) || isOpenAICompatPreviousResponseUnsupported(resp.StatusCode, upstreamMsg, respBody)) {
-			if isOpenAICompatPreviousResponseUnsupported(resp.StatusCode, upstreamMsg, respBody) {
-				s.disableOpenAICompatSessionContinuation(ctx, c, account, promptCacheKey)
-			} else {
-				s.deleteOpenAICompatSessionResponseID(ctx, c, account, promptCacheKey)
-			}
-			logger.L().Info("openai messages: previous_response_id unavailable, retrying without continuation",
-				zap.Int64("account_id", account.ID),
-				zap.String("previous_response_id", truncateOpenAIWSLogValue(previousResponseID, openAIWSIDValueMaxLen)),
-				zap.String("upstream_model", upstreamModel),
-			)
-			return s.ForwardAsAnthropic(ctx, c, account, body, promptCacheKey, defaultMappedModel)
+			return retryWithoutContinuation(isOpenAICompatPreviousResponseUnsupported(resp.StatusCode, upstreamMsg, respBody))
 		}
 		// Grok account-switched history often fails decrypt; strip encrypted
 		// reasoning once at the client-body level so failover accounts can accept
@@ -588,10 +601,15 @@ func (s *OpenAIGatewayService) forwardAsAnthropic(
 	var result *OpenAIForwardResult
 	var handleErr error
 	if clientStream {
-		result, handleErr = s.handleAnthropicStreamingResponse(resp, c, account, originalModel, billingModel, upstreamModel, startTime)
+		result, handleErr = s.handleAnthropicStreamingResponse(resp, c, account, originalModel, billingModel, upstreamModel, startTime, previousResponseID)
 	} else {
 		// Client wants JSON: buffer the streaming response and assemble a JSON reply.
-		result, handleErr = s.handleAnthropicBufferedStreamingResponse(resp, c, account, originalModel, billingModel, upstreamModel, startTime)
+		result, handleErr = s.handleAnthropicBufferedStreamingResponseWithContinuation(resp, c, account, originalModel, billingModel, upstreamModel, startTime, previousResponseID)
+	}
+	var continuationErr *openAIMessagesContinuationRetryError
+	if errors.As(handleErr, &continuationErr) {
+		restoreWriter()
+		return retryWithoutContinuation(continuationErr.unsupported)
 	}
 	if handleErr == nil && (result == nil || !result.ClientDisconnect) {
 		handleErr = stopWriter.finish()
@@ -678,9 +696,22 @@ func (s *OpenAIGatewayService) handleAnthropicBufferedStreamingResponse(
 	upstreamModel string,
 	startTime time.Time,
 ) (*OpenAIForwardResult, error) {
+	return s.handleAnthropicBufferedStreamingResponseWithContinuation(resp, c, account, originalModel, billingModel, upstreamModel, startTime, "")
+}
+
+func (s *OpenAIGatewayService) handleAnthropicBufferedStreamingResponseWithContinuation(
+	resp *http.Response,
+	c *gin.Context,
+	account *Account,
+	originalModel string,
+	billingModel string,
+	upstreamModel string,
+	startTime time.Time,
+	previousResponseID string,
+) (*OpenAIForwardResult, error) {
 	requestID := resp.Header.Get("x-request-id")
 
-	finalResponse, usage, acc, prior, err := s.readOpenAICompatBufferedTerminal(resp, c, account, "openai messages buffered", requestID)
+	finalResponse, usage, acc, prior, err := s.readOpenAICompatBufferedTerminal(resp, c, account, "openai messages buffered", requestID, previousResponseID)
 	if err != nil {
 		var readErr *openAICompatBufferedReadError
 		if errors.As(err, &readErr) && readErr != nil {
@@ -908,6 +939,7 @@ func (s *OpenAIGatewayService) readOpenAICompatBufferedTerminal(
 	account *Account,
 	logPrefix string,
 	requestID string,
+	previousResponseID ...string,
 ) (*apicompat.ResponsesResponse, OpenAIUsage, *apicompat.BufferedResponseAccumulator, openAICompatPriorModelAudit, error) {
 	acc := apicompat.NewBufferedResponseAccumulator()
 	acc.XAIServerSideSearch = account != nil && account.IsGrok()
@@ -993,6 +1025,9 @@ func (s *OpenAIGatewayService) readOpenAICompatBufferedTerminal(
 					payload = string(restoreCodexToolNamesFromContext(c, []byte(payload)))
 					var event apicompat.ResponsesStreamEvent
 					if err := json.Unmarshal([]byte(payload), &event); err == nil {
+						if retryErr := newOpenAIMessagesContinuationRetryError(c, []byte(payload), previousResponseID...); retryErr != nil {
+							return nil, usage, acc, prior, retryErr
+						}
 						s.parseSSEUsageBytesWithType([]byte(payload), event.Type, &usage)
 						acc.ProcessEvent(&event)
 						recordPrior(&event)
@@ -1041,6 +1076,9 @@ func (s *OpenAIGatewayService) readOpenAICompatBufferedTerminal(
 				)
 				continue
 			}
+			if retryErr := newOpenAIMessagesContinuationRetryError(c, []byte(payload), previousResponseID...); retryErr != nil {
+				return nil, usage, acc, prior, retryErr
+			}
 			s.parseSSEUsageBytesWithType([]byte(payload), event.Type, &usage)
 
 			acc.ProcessEvent(&event)
@@ -1083,6 +1121,7 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 	billingModel string,
 	upstreamModel string,
 	startTime time.Time,
+	previousResponseID ...string,
 ) (*OpenAIForwardResult, error) {
 	requestID := resp.Header.Get("x-request-id")
 	writeStreamHeaders := s.newStreamHeaderWriter(c, resp.Header)
@@ -1243,6 +1282,12 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 			// 回写让客户端感知并停止重试（F4），丢弃后续转换输出。
 			if eventType == "response.failed" || isBareErrorEvent {
 				payloadBytes := []byte(payload)
+				if !clientDisconnected && !clientOutputStarted {
+					if retryErr := newOpenAIMessagesContinuationRetryError(c, payloadBytes, previousResponseID...); retryErr != nil {
+						streamNonFailoverErr = retryErr
+						return true
+					}
+				}
 				if hit, code, msg := detectOpenAICyberPolicy(payloadBytes); hit {
 					MarkOpsCyberPolicy(c, CyberPolicyMark{
 						Code:           code,
