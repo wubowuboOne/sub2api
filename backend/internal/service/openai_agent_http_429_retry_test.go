@@ -89,7 +89,7 @@ func TestOpenAIAgentHTTP429RetryPolicy(t *testing.T) {
 			require.False(t, retry.ShouldReportAccountScheduleFailure())
 			require.Equal(t, 10, retry.SameAccountRetryMax)
 			require.True(t, retry.SameAccountRetryDeadline.IsZero())
-			require.EqualValues(t, 1, openAIAgentHTTP429RetryAccountID(c.Request.Context()))
+			require.EqualValues(t, 1, openAIAgentPinnedRetryAccountID(c.Request.Context()))
 			// A subsequent response cannot reset or enlarge this request's budget.
 			a.Credentials["pool_mode_retry_count"] = 20
 			resp.Header.Set("Retry-After", "3600")

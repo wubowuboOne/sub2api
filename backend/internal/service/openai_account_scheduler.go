@@ -2975,7 +2975,7 @@ func (s *OpenAIGatewayService) selectAccountWithSchedulerOnce(
 	decision := OpenAIAccountScheduleDecision{}
 	retryAccountID := OpenAIStreamRetryAccountID(ctx)
 	if retryAccountID == 0 {
-		retryAccountID = openAIAgentHTTP429RetryAccountID(ctx)
+		retryAccountID = openAIAgentPinnedRetryAccountID(ctx)
 	}
 	if accountID := retryAccountID; accountID > 0 {
 		if s.checkChannelPricingRestriction(ctx, groupID, requestedModel) {

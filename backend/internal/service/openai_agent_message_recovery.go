@@ -257,7 +257,7 @@ func (r *openAIAgentRecoveryRequest) preservesHistory() bool {
 }
 
 // OpenAIAgentRecoveryPreservesHistory identifies requests that forbid replay,
-// except for eligible native HTTP or pre-output SSE 429 retries pinned to an intact route.
+// except for eligible native HTTP or pre-output SSE retries pinned to an intact route.
 func OpenAIAgentRecoveryPreservesHistory(ctx context.Context) bool {
 	return openAIAgentRecoveryPreservesHistory(ctx)
 }
@@ -360,7 +360,7 @@ func (s *OpenAIGatewayService) checkOpenAIAgentRecoveryAccount(ctx context.Conte
 	if request == nil {
 		return nil
 	}
-	if retry := openAIAgentHTTP429RetryFromContext(ctx); retry != nil && (account == nil ||
+	if retry := openAIAgentPinnedRetryFromContext(ctx); retry != nil && (account == nil ||
 		account.ID != retry.route.accountID || openAIAgentRecoveryConfig(account, request.model) != retry.route.config) {
 		return openAIAgentRecoveryRefusal(ctx, "route_identity")
 	}
@@ -557,7 +557,7 @@ func (s *OpenAIGatewayService) prepareOpenAIAgentRecoveryAttempt(ctx context.Con
 	}
 	wire := openAIAgentRecoveryWireDigest(req.URL.String(), req.Header, gjson.GetBytes(body, "model").String())
 	binding := openAIAgentRecoveryBinding{accountID: account.ID, config: openAIAgentRecoveryConfig(account, request.model), wire: wire, expiresAt: time.Now().Add(s.openAIWSSessionStickyTTL())}
-	if err := checkOpenAIAgentHTTP429Retry(ctx, binding, req); err != nil {
+	if err := checkOpenAIAgentPinnedRetry(ctx, binding, req); err != nil {
 		return noop, err
 	}
 	if request.omitted400History && (request.retry400Route == nil || !sameOpenAIAgentRecoveryRoute(*request.retry400Route, binding)) {

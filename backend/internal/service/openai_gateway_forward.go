@@ -1457,9 +1457,17 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		}
 
 		// Get proxy URL
-		proxyURL := ""
-		if account.ProxyID != nil && account.Proxy != nil {
-			proxyURL = account.Proxy.URL()
+		proxyURL := openAIAccountProxyURL(account)
+		var retryProxy *openAIAgentRetryProxy
+		if account.IsOpenAIApiKey() && openAIAgentRecoveryPreservesHistory(ctx) {
+			retryProxy = openAIAgentHTTP502RetryProxy(account, proxyURL)
+		}
+		if retry := openAIAgentPinnedRetryFromContext(ctx); retry != nil && retry.proxy != nil &&
+			(retryProxy == nil || *retry.proxy != *retryProxy) {
+			if headerGuard != nil {
+				headerGuard.close()
+			}
+			return nil, openAIAgentRecoveryRefusal(ctx, "route_identity")
 		}
 
 		// Send request
@@ -1581,6 +1589,9 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			}
 			if openAIAgentRecoveryPreservesHistory(ctx) {
 				if retry := s.newOpenAIAgentHTTP429RetryError(ctx, c, account, upstreamReq, resp, respBody); retry != nil {
+					return nil, retry
+				}
+				if retry := s.newOpenAIAgentHTTP502RetryError(ctx, c, account, upstreamReq, resp, respBody, retryProxy); retry != nil {
 					return nil, retry
 				}
 				return s.handleErrorResponse(ctx, resp, c, account, body, resolveOpenAIErrorSchedulingModel(billingModel, upstreamModel))

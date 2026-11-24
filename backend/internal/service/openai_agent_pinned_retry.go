@@ -14,32 +14,38 @@ import (
 const (
 	OpenAIAgentHTTP429RetryReason GatewayFailureReason = "openai_agent_http_429_same_account_retry"
 	OpenAIAgentSSE429RetryReason  GatewayFailureReason = "openai_agent_sse_429_same_account_retry"
+	OpenAIAgentHTTP502RetryReason GatewayFailureReason = "openai_agent_http_502_same_account_retry"
 )
 
-type openAIAgentHTTP429RetryKey struct{}
+type openAIAgentPinnedRetryKey struct{}
 
-type openAIAgentHTTP429Retry struct {
+type openAIAgentPinnedRetry struct {
 	route openAIAgentRecoveryBinding
 	body  [32]byte
 	limit int
+	proxy *openAIAgentRetryProxy
 }
 
-func openAIAgentHTTP429RetryFromContext(ctx context.Context) *openAIAgentHTTP429Retry {
+func (e *UpstreamFailoverError) IsOpenAIAgentPinnedRetry() bool {
+	return e != nil && (e.Reason == OpenAIAgentHTTP429RetryReason || e.Reason == OpenAIAgentSSE429RetryReason || e.Reason == OpenAIAgentHTTP502RetryReason)
+}
+
+func openAIAgentPinnedRetryFromContext(ctx context.Context) *openAIAgentPinnedRetry {
 	if ctx == nil {
 		return nil
 	}
-	retry, _ := ctx.Value(openAIAgentHTTP429RetryKey{}).(*openAIAgentHTTP429Retry)
+	retry, _ := ctx.Value(openAIAgentPinnedRetryKey{}).(*openAIAgentPinnedRetry)
 	return retry
 }
 
-func openAIAgentHTTP429RetryAccountID(ctx context.Context) int64 {
-	if retry := openAIAgentHTTP429RetryFromContext(ctx); retry != nil {
+func openAIAgentPinnedRetryAccountID(ctx context.Context) int64 {
+	if retry := openAIAgentPinnedRetryFromContext(ctx); retry != nil {
 		return retry.route.accountID
 	}
 	return 0
 }
 
-func openAIAgentHTTP429BodyDigest(req *http.Request) ([32]byte, error) {
+func openAIAgentRetryBodyDigest(req *http.Request) ([32]byte, error) {
 	if req == nil || req.GetBody == nil {
 		return [32]byte{}, io.ErrUnexpectedEOF
 	}
@@ -57,11 +63,11 @@ func openAIAgentHTTP429BodyDigest(req *http.Request) ([32]byte, error) {
 	return digest, nil
 }
 
-func (s *OpenAIGatewayService) openAIAgent429RetryRequest(ctx context.Context, c *gin.Context, account *Account) *openAIAgentRecoveryRequest {
+func (s *OpenAIGatewayService) openAIAgentPinnedRetryRequest(ctx context.Context, c *gin.Context, account *Account, status int) *openAIAgentRecoveryRequest {
 	r := openAIAgentRecoveryFromContext(ctx)
 	if ctx.Err() != nil || isControlledExperiment(ctx) || c == nil || c.Request == nil || c.Request.Context().Err() != nil ||
 		s == nil || s.accountRepo == nil || account == nil || account.Platform != PlatformOpenAI ||
-		!account.IsPoolMode() || account.GetPoolModeRetryCount() <= 0 || !account.IsPoolModeRetryableStatus(http.StatusTooManyRequests) ||
+		!account.IsPoolMode() || account.GetPoolModeRetryCount() <= 0 || !account.IsPoolModeRetryableStatus(status) ||
 		r == nil || !r.disableOwnerBinding || len(r.items) == 0 || r.omittedHistory || r.omitted400History || r.disallowLearning || r.delivery == nil ||
 		IsResponseCommitted(c) || openAIStreamClientOutputStarted(c, false) {
 		return nil
@@ -69,23 +75,31 @@ func (s *OpenAIGatewayService) openAIAgent429RetryRequest(ctx context.Context, c
 	return r
 }
 
-func pinOpenAIAgent429Retry(ctx context.Context, c *gin.Context, account *Account, req *http.Request, r *openAIAgentRecoveryRequest) *openAIAgentHTTP429Retry {
-	if retry := openAIAgentHTTP429RetryFromContext(ctx); retry != nil {
-		return retry
+func pinOpenAIAgentRetry(ctx context.Context, c *gin.Context, account *Account, req *http.Request, r *openAIAgentRecoveryRequest, proxy *openAIAgentRetryProxy) *openAIAgentPinnedRetry {
+	retry := openAIAgentPinnedRetryFromContext(ctx)
+	if retry != nil {
+		if proxy == nil || retry.proxy != nil {
+			return retry
+		}
+		// An HTTP 502 after a pinned 429 also requires a fixed egress.
+		next := *retry
+		next.proxy = proxy
+		retry = &next
+	} else {
+		digest, err := openAIAgentRetryBodyDigest(req)
+		if err != nil {
+			return nil
+		}
+		retry = &openAIAgentPinnedRetry{route: r.delivery.binding, body: digest, limit: account.GetPoolModeRetryCount(), proxy: proxy}
 	}
-	digest, err := openAIAgentHTTP429BodyDigest(req)
-	if err != nil {
-		return nil
-	}
-	retry := &openAIAgentHTTP429Retry{route: r.delivery.binding, body: digest, limit: account.GetPoolModeRetryCount()}
 	// Forward may use a private recovery context; retain the route on the
 	// handler's context so scheduler re-entry cannot select a peer.
-	c.Request = c.Request.WithContext(context.WithValue(c.Request.Context(), openAIAgentHTTP429RetryKey{}, retry))
+	c.Request = c.Request.WithContext(context.WithValue(c.Request.Context(), openAIAgentPinnedRetryKey{}, retry))
 	return retry
 }
 
 func (s *OpenAIGatewayService) newOpenAIAgentHTTP429RetryError(ctx context.Context, c *gin.Context, account *Account, req *http.Request, resp *http.Response, payload []byte) *UpstreamFailoverError {
-	r := s.openAIAgent429RetryRequest(ctx, c, account)
+	r := s.openAIAgentPinnedRetryRequest(ctx, c, account, http.StatusTooManyRequests)
 	if r == nil || resp == nil || resp.StatusCode != http.StatusTooManyRequests {
 		return nil
 	}
@@ -107,7 +121,11 @@ func (s *OpenAIGatewayService) newOpenAIAgentHTTP429RetryError(ctx context.Conte
 	if !s.shouldFailoverOpenAIUpstreamResponse(account, resp.StatusCode, message, payload) {
 		return nil
 	}
-	retry := pinOpenAIAgent429Retry(ctx, c, account, req, r)
+	return newOpenAIAgentPinnedHTTPRetryError(ctx, c, account, req, r, resp, payload, message, OpenAIAgentHTTP429RetryReason, nil)
+}
+
+func newOpenAIAgentPinnedHTTPRetryError(ctx context.Context, c *gin.Context, account *Account, req *http.Request, r *openAIAgentRecoveryRequest, resp *http.Response, payload []byte, message string, reason GatewayFailureReason, proxy *openAIAgentRetryProxy) *UpstreamFailoverError {
+	retry := pinOpenAIAgentRetry(ctx, c, account, req, r, proxy)
 	if retry == nil {
 		return nil
 	}
@@ -115,7 +133,7 @@ func (s *OpenAIGatewayService) newOpenAIAgentHTTP429RetryError(ctx context.Conte
 		Platform: account.Platform, AccountID: account.ID, AccountName: account.Name,
 		ProxyID: opsUpstreamProxyID(account), ProxyName: opsUpstreamProxyName(account),
 		UpstreamStatusCode: resp.StatusCode, UpstreamRequestID: resp.Header.Get("x-request-id"),
-		Kind: "failover", Message: message, Reason: string(OpenAIAgentHTTP429RetryReason),
+		Kind: "failover", Message: message, Reason: string(reason),
 		Stage: string(GatewayFailureStageInference), Scope: string(GatewayFailureScopeRequest),
 	})
 	return &UpstreamFailoverError{
@@ -124,7 +142,7 @@ func (s *OpenAIGatewayService) newOpenAIAgentHTTP429RetryError(ctx context.Conte
 		SameAccountRetryDelay:  openAIRequestScopedRetryDelay(resp.Header, payload),
 		RequestScopedTransient: true, NextAccountAction: NextAccountStop,
 		Stage: GatewayFailureStageInference, Scope: GatewayFailureScopeRequest,
-		Reason: OpenAIAgentHTTP429RetryReason,
+		Reason: reason,
 	}
 }
 
@@ -168,7 +186,7 @@ func (s *OpenAIGatewayService) newOpenAIAgentSSE429RetryError(ctx context.Contex
 		resp == nil || resp.StatusCode != http.StatusOK || !isEventStreamResponse(resp.Header) || OpenAIImageGenerationIntentFromContext(ctx) {
 		return nil
 	}
-	r := s.openAIAgent429RetryRequest(ctx, c, account)
+	r := s.openAIAgentPinnedRetryRequest(ctx, c, account, http.StatusTooManyRequests)
 	if r == nil {
 		return nil
 	}
@@ -186,7 +204,7 @@ func (s *OpenAIGatewayService) newOpenAIAgentSSE429RetryError(ctx context.Contex
 	if disposition, _ := classifyOpenAIOAuth429(resp.Header, payload); disposition != openAIOAuth429Transient {
 		return nil
 	}
-	retry := pinOpenAIAgent429Retry(ctx, c, account, req, r)
+	retry := pinOpenAIAgentRetry(ctx, c, account, req, r, nil)
 	if retry == nil {
 		return nil
 	}
@@ -201,15 +219,15 @@ func (s *OpenAIGatewayService) newOpenAIAgentSSE429RetryError(ctx context.Contex
 	return &result
 }
 
-func checkOpenAIAgentHTTP429Retry(ctx context.Context, binding openAIAgentRecoveryBinding, req *http.Request) error {
-	retry := openAIAgentHTTP429RetryFromContext(ctx)
+func checkOpenAIAgentPinnedRetry(ctx context.Context, binding openAIAgentRecoveryBinding, req *http.Request) error {
+	retry := openAIAgentPinnedRetryFromContext(ctx)
 	if retry == nil {
 		return nil
 	}
 	if !sameOpenAIAgentRecoveryRoute(retry.route, binding) {
 		return openAIAgentRecoveryRefusal(ctx, "route_identity")
 	}
-	digest, err := openAIAgentHTTP429BodyDigest(req)
+	digest, err := openAIAgentRetryBodyDigest(req)
 	if err != nil || digest != retry.body {
 		return openAIAgentRecoveryRefusal(ctx, "input_integrity")
 	}

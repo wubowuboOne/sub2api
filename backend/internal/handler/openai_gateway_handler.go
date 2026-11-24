@@ -1383,8 +1383,8 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 						h.gatewayService.ReportOpenAIAccountScheduleResult(account, openAIAccountScheduleModel(c, account, forwardModel, requireCompact, nil), false, nil, err)
 					}
 					agentToolResult := service.OpenAIAgentToolResultContinuation(c.Request.Context())
-					agent429Retry := failoverErr.Reason == service.OpenAIAgentHTTP429RetryReason || failoverErr.Reason == service.OpenAIAgentSSE429RetryReason
-					if service.OpenAIAgentRecoveryPreservesHistory(c.Request.Context()) && !agent429Retry {
+					agentPinnedRetry := failoverErr.IsOpenAIAgentPinnedRetry()
+					if service.OpenAIAgentRecoveryPreservesHistory(c.Request.Context()) && !agentPinnedRetry {
 						reqLog.Warn("openai.failover_stopped",
 							zap.String("reason", "agent_preserved_history"),
 							zap.Int64("account_id", account.ID),
@@ -1393,7 +1393,7 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 						h.handleFailoverExhausted(c, failoverErr, streamStarted)
 						return
 					}
-					if !agent429Retry && !failoverErr.RetryAfterOutput && failoverErr.TransportFailure == nil && failoverErr.Reason != service.OpenAIEncryptedContentRetryReason && !forbiddenBudget.canRetry(failoverErr, switchCount) {
+					if !agentPinnedRetry && !failoverErr.RetryAfterOutput && failoverErr.TransportFailure == nil && failoverErr.Reason != service.OpenAIEncryptedContentRetryReason && !forbiddenBudget.canRetry(failoverErr, switchCount) {
 						h.handleFailoverExhausted(c, failoverErr, streamStarted)
 						return
 					}
