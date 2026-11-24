@@ -257,7 +257,7 @@ func (r *openAIAgentRecoveryRequest) preservesHistory() bool {
 }
 
 // OpenAIAgentRecoveryPreservesHistory identifies requests that forbid replay,
-// except for explicitly rejected HTTP 429 retries pinned to an intact route.
+// except for eligible native HTTP or pre-output SSE 429 retries pinned to an intact route.
 func OpenAIAgentRecoveryPreservesHistory(ctx context.Context) bool {
 	return openAIAgentRecoveryPreservesHistory(ctx)
 }

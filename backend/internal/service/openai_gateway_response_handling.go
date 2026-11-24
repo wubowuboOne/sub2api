@@ -285,6 +285,7 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 	agentCompleted := false
 	protectionTerminalSuccessful := false
 	responsesSemanticOutputSeen := false
+	agentSSE429PreambleOnly := configuredStreamRetry && openAIAgentRecoveryPreservesHistory(ctx)
 	capacityFailoverSuppressedLogged := false
 	failedMessage := ""
 	var grokScopedFailure error
@@ -655,6 +656,9 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 				writeKeepaliveDirect(line + "\n")
 				return
 			}
+			if agentSSE429PreambleOnly && eventType != "response.failed" && !openAIAgentSSE429RetryPreamble(dataBytes, eventType) {
+				agentSSE429PreambleOnly = false
+			}
 			if codexFailureTerminal && sawBareError && !sawResponseFailed &&
 				(eventType == "response.completed" || eventType == "response.done") {
 				// A later successful terminal is authoritative over a pending bare
@@ -799,7 +803,11 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 					}
 					if shouldFailover {
 						sawFailedEvent = true
-						streamEarlyErr = s.newOpenAIStreamFailoverErrorWithModel(c, account, false, upstreamRequestID, dataBytes, failedMessage, mappedModel, resp.Header)
+						failure := s.newOpenAIStreamFailoverErrorWithModel(c, account, false, upstreamRequestID, dataBytes, failedMessage, mappedModel, resp.Header)
+						if failure.StreamFailedFrame != nil {
+							failure.StreamFailedFrame.agentSSE429PreambleOnly = agentSSE429PreambleOnly && !clientDisconnected
+						}
+						streamEarlyErr = failure
 						return
 					}
 					if !cyberHit && !sawBareError {

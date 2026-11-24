@@ -1690,6 +1690,12 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 				err = nil
 			}
 			if err != nil {
+				var streamFailure *UpstreamFailoverError
+				if errors.As(err, &streamFailure) {
+					if retry := s.newOpenAIAgentSSE429RetryError(ctx, c, account, upstreamReq, resp, streamFailure); retry != nil {
+						return nil, retry
+					}
+				}
 				var encryptedSignal *openAIEncryptedContentRecoverySignal
 				if errors.As(err, &encryptedSignal) {
 					markInvalidEncryptedContentLineage("http", body, encryptedSignal.payload)

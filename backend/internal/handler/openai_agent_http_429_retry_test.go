@@ -20,11 +20,13 @@ import (
 )
 
 const agentHTTP429Body = `{"error":{"message":"Upstream rate limit exceeded, please retry later","type":"rate_limit_error"}}`
+const agentSSE429Body = `{"response":{"error":{"code":"rate_limit_exceeded","message":"Upstream rate limit exceeded, please retry later","type":"tokens"},"id":"resp_failed_attempt","status":"failed"},"sequence_number":10,"type":"response.failed"}`
 
 type agentHTTP429Upstream struct {
 	*openAIHTTP524DiagnosticUpstream
-	payload string
-	sse     bool
+	payload  string
+	sseEvent string
+	preamble string
 }
 
 func (u *agentHTTP429Upstream) Do(req *http.Request, proxy string, accountID int64, concurrency int) (*http.Response, error) {
@@ -39,10 +41,10 @@ func (u *agentHTTP429Upstream) Do(req *http.Request, proxy string, accountID int
 	}
 	resp.Header.Set("Content-Type", "application/json")
 	resp.Header.Set("Retry-After-Ms", "1")
-	if u.sse {
+	if u.sseEvent != "" {
 		resp.StatusCode = http.StatusOK
 		resp.Header.Set("Content-Type", "text/event-stream")
-		payload = "event: error\ndata: " + payload + "\n\n"
+		payload = u.preamble + "event: " + u.sseEvent + "\ndata: " + payload + "\n\n"
 	}
 	resp.Body = io.NopCloser(strings.NewReader(payload))
 	return resp, nil
@@ -147,7 +149,7 @@ func TestOpenAIAgentPreservedHistoryHTTP429Stops(t *testing.T) {
 				issue715Upstream: &issue715Upstream{mode: "pool_failure"}, failureStatus: 429,
 			}}
 			if stop == "sse" {
-				upstream.sse = true
+				upstream.sseEvent = "error"
 			}
 			if stop == "quota" {
 				upstream.payload = `{"error":{"code":"insufficient_quota","type":"insufficient_quota","message":"Quota exceeded"}}`
@@ -183,6 +185,68 @@ func TestOpenAIAgentPreservedHistoryHTTP429Stops(t *testing.T) {
 			h.Responses(c)
 			require.Len(t, upstream.ids, 1, rec.Body.String())
 			require.EqualValues(t, 1, upstream.ids[0])
+		})
+	}
+}
+
+func TestOpenAIAgentPreservedHistorySSE429Retry(t *testing.T) {
+	const reasoning = "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_failed_attempt\",\"output\":[]}}\n\n" +
+		"data: {\"type\":\"response.reasoning_summary_text.delta\",\"delta\":\"private progress\"}\n\n"
+	const output = "data: {\"type\":\"response.output_text.delta\",\"delta\":\"visible\"}\n\n"
+	const tool = "data: {\"type\":\"response.output_item.added\",\"item\":{\"type\":\"mcp_call\",\"id\":\"fixture_tool\"}}\n\n"
+	for _, scenario := range []struct {
+		name, preamble, payload string
+		attempts, recoverAfter  int
+	}{
+		{"recovers", reasoning, agentSSE429Body, 2, 1},
+		{"exhausted", "", agentSSE429Body, 3, 0},
+		{"visible_output", output, agentSSE429Body, 1, 0},
+		{"upstream_tool_progress", tool, agentSSE429Body, 1, 0},
+		{"quota", "", strings.Replace(agentSSE429Body, `"type":"tokens"`, `"type":"tokens","resets_at":2000000000`, 1), 1, 0},
+		{"unknown_code", "", strings.Replace(agentSSE429Body, `"rate_limit_exceeded"`, `"unrecognized_rejection"`, 1), 1, 0},
+		{"policy", "", strings.Replace(agentSSE429Body, `"rate_limit_exceeded"`, `"session_blocked_by_cyber_policy"`, 1), 1, 0},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			accounts := issue715Accounts()
+			accounts[1].Schedulable = false
+			accounts[0].Type = service.AccountTypeAPIKey
+			accounts[0].Credentials = map[string]any{
+				"api_key": "fixture-sse-429-key", "base_url": "https://api.example.test",
+				"pool_mode": true, "pool_mode_retry_count": 2,
+				"pool_mode_retry_status_codes": []any{float64(429)},
+			}
+			upstream := &agentHTTP429Upstream{
+				openAIHTTP524DiagnosticUpstream: &openAIHTTP524DiagnosticUpstream{
+					issue715Upstream: &issue715Upstream{mode: "pool_failure"}, failureStatus: 429, recoverAfter: scenario.recoverAfter,
+				},
+				sseEvent: "response.failed", payload: scenario.payload, preamble: scenario.preamble,
+			}
+			upstream.afterFailure = func(int) {
+				accounts[1].Schedulable = true
+				accounts[0].Priority, accounts[1].Priority = 100, 0
+			}
+			h := newOpenAIResponsesFailoverTestHandler(t, upstream, accounts...)
+			h.cfg.Gateway.DisableEncryptedAgentOwnerBinding = true
+			c, rec := newIssue715Context(t, issue715Body(true, true))
+			c.Request.Header.Set("session_id", "fixture-sse-429")
+			core, logs := observer.New(zap.DebugLevel)
+			c.Request = c.Request.WithContext(logger.IntoContext(c.Request.Context(), zap.New(core)))
+			h.Responses(c)
+			require.True(t, service.OpenAIAgentRecoveryPreservesHistory(c.Request.Context()))
+			require.Len(t, upstream.ids, scenario.attempts, rec.Body.String())
+			require.Equal(t, scenario.attempts-1, logs.FilterMessage("openai.pool_mode_same_account_retry").Len())
+			require.Zero(t, logs.FilterMessage("openai.upstream_failover_switching").Len())
+			for i, id := range upstream.ids {
+				require.EqualValues(t, 1, id)
+				require.Equal(t, upstream.bodies[0], upstream.bodies[i])
+				require.Equal(t, upstream.requestHeaders[0], upstream.requestHeaders[i])
+			}
+			if scenario.recoverAfter > 0 {
+				require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+				require.NotContains(t, rec.Body.String(), "resp_failed_attempt")
+				require.NotContains(t, rec.Body.String(), "private progress")
+				require.NotContains(t, rec.Body.String(), "rate limit exceeded")
+			}
 		})
 	}
 }

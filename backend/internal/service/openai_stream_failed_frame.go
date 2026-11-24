@@ -9,6 +9,8 @@ type OpenAIStreamFailedFrame struct {
 	Platform string
 	Payload  []byte
 	Message  string
+
+	agentSSE429PreambleOnly bool
 }
 
 // ApplyOpenAIStreamFailedFrameRule applies the error passthrough rules to the

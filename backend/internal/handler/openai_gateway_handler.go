@@ -1383,12 +1383,17 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 						h.gatewayService.ReportOpenAIAccountScheduleResult(account, openAIAccountScheduleModel(c, account, forwardModel, requireCompact, nil), false, nil, err)
 					}
 					agentToolResult := service.OpenAIAgentToolResultContinuation(c.Request.Context())
-					agentHTTP429Retry := failoverErr.Reason == service.OpenAIAgentHTTP429RetryReason
-					if service.OpenAIAgentRecoveryPreservesHistory(c.Request.Context()) && !agentHTTP429Retry {
+					agent429Retry := failoverErr.Reason == service.OpenAIAgentHTTP429RetryReason || failoverErr.Reason == service.OpenAIAgentSSE429RetryReason
+					if service.OpenAIAgentRecoveryPreservesHistory(c.Request.Context()) && !agent429Retry {
+						reqLog.Warn("openai.failover_stopped",
+							zap.String("reason", "agent_preserved_history"),
+							zap.Int64("account_id", account.ID),
+							zap.Int("upstream_status", failoverErr.StatusCode),
+						)
 						h.handleFailoverExhausted(c, failoverErr, streamStarted)
 						return
 					}
-					if !agentHTTP429Retry && !failoverErr.RetryAfterOutput && failoverErr.TransportFailure == nil && failoverErr.Reason != service.OpenAIEncryptedContentRetryReason && !forbiddenBudget.canRetry(failoverErr, switchCount) {
+					if !agent429Retry && !failoverErr.RetryAfterOutput && failoverErr.TransportFailure == nil && failoverErr.Reason != service.OpenAIEncryptedContentRetryReason && !forbiddenBudget.canRetry(failoverErr, switchCount) {
 						h.handleFailoverExhausted(c, failoverErr, streamStarted)
 						return
 					}
@@ -1406,6 +1411,7 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 							sameAccountRetryCount[account.ID]++
 							retryDelay := sameAccountRetryDelayFor(failoverErr, sameAccountRetryCount[account.ID])
 							reqLog.Warn("openai.pool_mode_same_account_retry",
+								zap.String("retry_reason", string(failoverErr.Reason)),
 								zap.Bool("retry_after_output", failoverErr.RetryAfterOutput),
 								zap.Int64("account_id", account.ID),
 								zap.Int("upstream_status", failoverErr.StatusCode),

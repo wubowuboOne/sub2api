@@ -736,6 +736,10 @@ func isOpenAICodexReasoningGPTModel(modelID string) bool {
 
 func isOpenAICodexImageInputModel(modelID string) bool {
 	normalized := canonicalizeOpenAIModelAliasSpelling(modelID)
+	switch normalizeOpenAIGPT62Model(normalized) {
+	case "gpt-6.2-sol", "gpt-6.2-astra":
+		return true
+	}
 	return isOpenAIGPT6Model(normalized) ||
 		strings.HasPrefix(normalized, "gpt-5") ||
 		strings.HasPrefix(normalized, "gpt-4o") ||
@@ -2540,6 +2544,8 @@ func completeAPIKeyCodexModelsManifestMetadata(body []byte, completeAll bool, ac
 
 		completeDescriptor := completeAll || isDeepSeekCodexModel(slug)
 		forceOfficialImage := officialOpenAI && isOpenAICodexImageInputModel(slug)
+		// Preserve upstream detail metadata for GPT-6.2 instead of inferring it from image input.
+		forceOfficialOriginalDetail := forceOfficialImage && normalizeOpenAIGPT62Model(slug) == ""
 		if !completeDescriptor && !forceOfficialImage {
 			continue
 		}
@@ -2551,8 +2557,8 @@ func completeAPIKeyCodexModelsManifestMetadata(body []byte, completeAll bool, ac
 		}
 		if forceOfficialImage {
 			descriptor.InputModalities = []string{"text", "image"}
-			descriptor.SupportsImageDetailOriginal = true
 		}
+		descriptor.SupportsImageDetailOriginal = forceOfficialOriginalDetail
 		defaultBody, err := json.Marshal(descriptor)
 		if err != nil {
 			return nil, fmt.Errorf("encode default model %q: %w", slug, err)
@@ -2589,6 +2595,8 @@ func completeAPIKeyCodexModelsManifestMetadata(body []byte, completeAll bool, ac
 				model["input_modalities"] = modalities
 				modelChanged = true
 			}
+		}
+		if forceOfficialOriginalDetail {
 			imageDetailOriginal := json.RawMessage("true")
 			if !bytes.Equal(bytes.TrimSpace(model["supports_image_detail_original"]), imageDetailOriginal) {
 				model["supports_image_detail_original"] = imageDetailOriginal

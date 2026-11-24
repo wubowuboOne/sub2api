@@ -645,13 +645,15 @@ func TestBuildCodexModelsManifestForGroupAdvertisesOfficialOpenAIResponsesImageI
 		context.Background(),
 		&Group{ID: groupID, Platform: PlatformComposite},
 		"",
-		[]string{"gpt-5.6-sol"},
+		[]string{"gpt-5.6-sol", "gpt-6.2-sol", "gpt-6.2-astra"},
 	)
 	require.NoError(t, err)
 
 	models := decodeCodexManifestModels(t, body)
-	require.Len(t, models, 1)
-	require.Equal(t, []any{"text", "image"}, models[0]["input_modalities"])
+	require.Len(t, models, 3)
+	for _, model := range models {
+		require.Equal(t, []any{"text", "image"}, model["input_modalities"], "%v", model["slug"])
+	}
 }
 
 func TestBuildCodexModelsManifestForGroupUsesProviderImageCapabilities(t *testing.T) {
@@ -885,6 +887,7 @@ func TestBuildCodexModelsManifestForGroupPrefersSyncedOpenAIImageCapabilities(t 
 		if modalities != nil {
 			account.SetUpstreamModelMetadataSnapshot(UpstreamModelMetadataSnapshot{Models: map[string]UpstreamModelMetadata{
 				"gpt-5.6-sol": {ID: "gpt-5.6-sol", InputModalities: modalities},
+				"gpt-6.2-sol": {ID: "gpt-6.2-sol", InputModalities: modalities},
 			}})
 		}
 		return account
@@ -925,12 +928,14 @@ func TestBuildCodexModelsManifestForGroupPrefersSyncedOpenAIImageCapabilities(t 
 				context.Background(),
 				&Group{ID: groupID, Platform: PlatformOpenAI},
 				"",
-				[]string{"gpt-5.6-sol"},
+				[]string{"gpt-5.6-sol", "gpt-6.2-sol"},
 			)
 			require.NoError(t, err)
 			models := decodeCodexManifestModels(t, body)
-			require.Len(t, models, 1)
-			require.Equal(t, tt.modalities, models[0]["input_modalities"])
+			require.Len(t, models, 2)
+			for _, model := range models {
+				require.Equal(t, tt.modalities, model["input_modalities"], "%v", model["slug"])
+			}
 		})
 	}
 }
@@ -2351,12 +2356,20 @@ func TestCompleteAPIKeyCodexModelsManifestForClientMarksOnlyOfficialVisionGPTIma
 	t.Parallel()
 
 	svc := &OpenAIGatewayService{}
-	manifest := &OpenAIModelsResponse{Body: []byte(`{"models":[{"slug":"gpt-6-astra"},{"slug":"gpt-5.6-sol"},{"slug":"gpt-4o"},{"slug":"gpt-3.5-turbo"},{"slug":"gpt-4"}]}`)}
+	manifest := &OpenAIModelsResponse{Body: []byte(`{"models":[
+		{"slug":"gpt-6-astra"},
+		{"slug":"gpt-5.6-sol"},
+		{"slug":"gpt-4o"},
+		{"slug":"gpt-3.5-turbo"},
+		{"slug":"gpt-4"},
+		{"slug":"gpt-6.2-sol","input_modalities":["text"]},
+		{"slug":"gpt-6.2-astra","supports_image_detail_original":true}
+	]}`)}
 	account := newCodexModelsAPIKeyTestAccount("")
 
 	require.NoError(t, svc.CompleteAPIKeyCodexModelsManifestForClient(manifest, account))
 	models := decodeCodexManifestModels(t, manifest.Body)
-	require.Len(t, models, 5)
+	require.Len(t, models, 7)
 
 	bySlug := make(map[string]map[string]any, len(models))
 	for _, model := range models {
@@ -2364,10 +2377,12 @@ func TestCompleteAPIKeyCodexModelsManifestForClientMarksOnlyOfficialVisionGPTIma
 		require.True(t, ok)
 		bySlug[slug] = model
 	}
-	for _, slug := range []string{"gpt-6-astra", "gpt-5.6-sol", "gpt-4o"} {
+	for _, slug := range []string{"gpt-6-astra", "gpt-5.6-sol", "gpt-4o", "gpt-6.2-astra"} {
 		require.Equal(t, []any{"text", "image"}, bySlug[slug]["input_modalities"])
 		require.Equal(t, true, bySlug[slug]["supports_image_detail_original"])
 	}
+	require.Equal(t, []any{"text", "image"}, bySlug["gpt-6.2-sol"]["input_modalities"])
+	require.Equal(t, false, bySlug["gpt-6.2-sol"]["supports_image_detail_original"])
 	for _, slug := range []string{"gpt-3.5-turbo", "gpt-4"} {
 		require.Equal(t, []any{"text"}, bySlug[slug]["input_modalities"])
 		require.Equal(t, false, bySlug[slug]["supports_image_detail_original"])
