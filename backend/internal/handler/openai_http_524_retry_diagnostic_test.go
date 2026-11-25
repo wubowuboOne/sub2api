@@ -27,6 +27,7 @@ type openAIHTTP524DiagnosticUpstream struct {
 	failureDelay   time.Duration
 	failures       int
 	failureStatus  int
+	failureJSON    string
 	recoverAfter   int
 	streamFailure  bool
 	afterFailure   func(int)
@@ -55,6 +56,10 @@ func (u *openAIHTTP524DiagnosticUpstream) Do(req *http.Request, proxy string, ac
 	}
 	resp.Header.Set("Content-Type", "text/plain")
 	resp.Body = io.NopCloser(strings.NewReader(fmt.Sprintf("error code: %d", resp.StatusCode)))
+	if u.failureJSON != "" {
+		resp.Header.Set("Content-Type", "application/json")
+		resp.Body = io.NopCloser(strings.NewReader(u.failureJSON))
+	}
 	if u.streamFailure {
 		payload, _ := json.Marshal(map[string]any{
 			"type": "response.failed",

@@ -6,6 +6,29 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestOpenAIAgentHTTP502GatewayMessage(t *testing.T) {
+	const unavailable = "Upstream service temporarily unavailable"
+	for _, tc := range []struct {
+		name string
+		body string
+		want string
+	}{
+		{"plain", "  error code: 502\n", "error code: 502"},
+		{"json", `{"error":{"message":"Upstream service temporarily unavailable","type":"upstream_error"}}`, unavailable},
+		{"json_reordered", ` { "error": { "type":"upstream_error", "message":"Upstream service temporarily unavailable" } } `, unavailable},
+		{"unknown_message", `{"error":{"type":"upstream_error","message":"Upstream request failed"}}`, ""},
+		{"different_type", `{"error":{"type":"invalid_request_error","message":"Upstream service temporarily unavailable"}}`, ""},
+		{"provider_code", `{"error":{"type":"upstream_error","message":"Upstream service temporarily unavailable","code":"policy_violation"}}`, ""},
+		{"response_state", `{"error":{"type":"upstream_error","message":"Upstream service temporarily unavailable"},"id":"resp_fixture"}`, ""},
+		{"ambiguous_type", `{"error":{"type":"upstream_error","message":"Upstream service temporarily unavailable","type":"invalid_request_error"}}`, ""},
+		{"trailing_value", `{"error":{"type":"upstream_error","message":"Upstream service temporarily unavailable"}}[]`, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.want, openAIAgentHTTP502GatewayMessage([]byte(tc.body)))
+		})
+	}
+}
+
 func TestOpenAIAgentHTTP502Replayable(t *testing.T) {
 	for _, tc := range []struct {
 		name string

@@ -17,13 +17,19 @@ import (
 
 func TestOpenAIAgentPreservedHistoryHTTP502Retry(t *testing.T) {
 	const reason = "openai_agent_http_502_same_account_retry"
+	const upstreamUnavailable = `{"error":{"message":"Upstream service temporarily unavailable","type":"upstream_error"}}`
 	for _, tc := range []struct {
 		name         string
+		failureJSON  string
 		recoverAfter int
 		wantAttempts int
 	}{
 		{name: "recovers", recoverAfter: 2, wantAttempts: 3},
 		{name: "exhausted", wantAttempts: 3},
+		{name: "json_recovers", failureJSON: upstreamUnavailable, recoverAfter: 2, wantAttempts: 3},
+		{name: "json_exhausted", failureJSON: upstreamUnavailable, wantAttempts: 3},
+		{name: "json_hosted_tool", failureJSON: upstreamUnavailable, wantAttempts: 1},
+		{name: "json_not_configured", failureJSON: upstreamUnavailable, wantAttempts: 1},
 		{name: "not_configured", wantAttempts: 1},
 		{name: "retry_disabled", wantAttempts: 1},
 		{name: "stored", wantAttempts: 1},
@@ -43,7 +49,7 @@ func TestOpenAIAgentPreservedHistoryHTTP502Retry(t *testing.T) {
 				"pool_mode_retry_status_codes": []any{http.StatusBadGateway},
 			}
 			switch tc.name {
-			case "not_configured":
+			case "not_configured", "json_not_configured":
 				delete(accounts[0].Credentials, "pool_mode_retry_status_codes")
 			case "retry_disabled":
 				accounts[0].Credentials["pool_mode_retry_count"] = 0
@@ -51,6 +57,7 @@ func TestOpenAIAgentPreservedHistoryHTTP502Retry(t *testing.T) {
 			upstream := &openAIHTTP524DiagnosticUpstream{
 				issue715Upstream: &issue715Upstream{mode: "pool_failure"},
 				failureStatus:    http.StatusBadGateway,
+				failureJSON:      tc.failureJSON,
 				recoverAfter:     tc.recoverAfter,
 			}
 			h := newOpenAIResponsesFailoverTestHandler(t, upstream, accounts...)
@@ -58,7 +65,7 @@ func TestOpenAIAgentPreservedHistoryHTTP502Retry(t *testing.T) {
 			body, err := sjson.Set(issue715Body(true, true), "store", tc.name == "stored")
 			require.NoError(t, err)
 			tools := `[{"type":"namespace","name":"ledger","tools":[{"type":"function","name":"inspect"}]}]`
-			if tc.name == "hosted_tool" {
+			if tc.name == "hosted_tool" || tc.name == "json_hosted_tool" {
 				tools = `[{"type":"web_search"}]`
 			}
 			body, err = sjson.SetRaw(body, "tools", tools)
@@ -99,8 +106,8 @@ func TestOpenAIAgentPreservedHistoryHTTP502Retry(t *testing.T) {
 				require.Equal(t, upstream.requestHeaders[0], upstream.requestHeaders[i])
 			}
 			retries := logs.FilterMessage("openai.pool_mode_same_account_retry")
-			if tc.name == "recovers" || tc.name == "exhausted" {
-				require.Equal(t, 2, retries.Len())
+			if tc.wantAttempts > 1 {
+				require.Equal(t, tc.wantAttempts-1, retries.Len())
 				for _, entry := range retries.All() {
 					require.Equal(t, reason, entry.ContextMap()["retry_reason"])
 				}
@@ -112,12 +119,14 @@ func TestOpenAIAgentPreservedHistoryHTTP502Retry(t *testing.T) {
 					require.Equal(t, reason, event.Reason)
 					require.Equal(t, http.StatusBadGateway, event.UpstreamStatusCode)
 				}
+			} else if tc.failureJSON != "" {
+				require.Zero(t, retries.Len())
 			}
 			require.Zero(t, logs.FilterMessage("openai.upstream_failover_switching").Len())
 			if tc.recoverAfter > 0 {
 				require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
 				require.Contains(t, rec.Body.String(), "Same task: ledger balance 18")
-			} else if tc.name == "exhausted" {
+			} else if tc.wantAttempts > 1 {
 				require.Equal(t, http.StatusBadGateway, rec.Code, rec.Body.String())
 			}
 		})

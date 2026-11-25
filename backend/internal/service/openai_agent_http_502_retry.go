@@ -30,12 +30,15 @@ func openAIAgentHTTP502RetryProxy(account *Account, proxyURL string) *openAIAgen
 }
 
 func (s *OpenAIGatewayService) newOpenAIAgentHTTP502RetryError(ctx context.Context, c *gin.Context, account *Account, req *http.Request, resp *http.Response, payload []byte, proxy *openAIAgentRetryProxy) *UpstreamFailoverError {
-	const gatewayError = "error code: 502"
-	if resp.StatusCode != http.StatusBadGateway || proxy == nil || !bytes.Equal(bytes.TrimSpace(payload), []byte(gatewayError)) {
+	if resp.StatusCode != http.StatusBadGateway || proxy == nil {
 		return nil
 	}
 	r := s.openAIAgentPinnedRetryRequest(ctx, c, account, http.StatusBadGateway)
 	if r == nil || !account.IsOpenAIApiKey() || OpenAIImageGenerationIntentFromContext(ctx) || req.GetBody == nil {
+		return nil
+	}
+	message := openAIAgentHTTP502GatewayMessage(payload)
+	if message == "" {
 		return nil
 	}
 	reader, err := req.GetBody()
@@ -47,10 +50,29 @@ func (s *OpenAIGatewayService) newOpenAIAgentHTTP502RetryError(ctx context.Conte
 	if err != nil || !openAIAgentHTTP502Replayable(wireBody) {
 		return nil
 	}
-	return newOpenAIAgentPinnedHTTPRetryError(ctx, c, account, req, r, resp, payload, gatewayError, OpenAIAgentHTTP502RetryReason, proxy)
+	return newOpenAIAgentPinnedHTTPRetryError(ctx, c, account, req, r, resp, payload, message, OpenAIAgentHTTP502RetryReason, proxy)
 }
 
-// A bare 502 does not prove the upstream rejected the request before running
+func openAIAgentHTTP502GatewayMessage(payload []byte) string {
+	const plain = "error code: 502"
+	const unavailable = "Upstream service temporarily unavailable"
+	if bytes.Equal(bytes.TrimSpace(payload), []byte(plain)) {
+		return plain
+	}
+	if !utf8.Valid(payload) || !openAIEncryptedJSONUnambiguous(payload) {
+		return ""
+	}
+	// Accept the gateway envelope, not provider errors carrying additional codes or state.
+	envelope := gjson.ParseBytes(payload).Map()
+	upstreamError := envelope["error"].Map()
+	if len(envelope) == 1 && len(upstreamError) == 2 &&
+		upstreamError["type"].Str == "upstream_error" && upstreamError["message"].Str == unavailable {
+		return unavailable
+	}
+	return ""
+}
+
+// A gateway 502 does not prove the upstream rejected the request before running
 // it. Limit replay to stateless inference with no server-side tool execution.
 func openAIAgentHTTP502Replayable(body []byte) bool {
 	if !utf8.Valid(body) || !openAIEncryptedJSONUnambiguous(body) || openAI409HasProviderState(body) {
