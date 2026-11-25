@@ -31,7 +31,10 @@ func TestOpenAIMessagesWebSearchDedicatedAccountAndBilling(t *testing.T) {
 		{name: "disabled_search_fails_closed", mode: "disabled", status: 200, wantCalls: 0},
 		{name: "mixed_tools_keep_normal_routing", mixed: true, mode: "only", status: 200, wantCalls: 1, wantAccount: 8},
 		{name: "explicit_none_keeps_normal_routing", none: true, mode: "only", status: 200, wantCalls: 1, wantAccount: 8},
-		{name: "unconfigured_keeps_normal_routing", unconfigured: true, mode: "only", status: 200, wantCalls: 1, wantAccount: 8},
+		{name: "unconfigured_uses_in_group_search_account", unconfigured: true, mode: "only", status: 200, wantCalls: 1, wantAccount: 7},
+		{name: "unconfigured_allows_default_search_mode", unconfigured: true, mode: "default", status: 200, wantCalls: 1, wantAccount: 7},
+		{name: "unconfigured_without_eligible_search_account", unconfigured: true, mode: "disabled", status: 200},
+		{name: "unconfigured_composite_resolved_to_openai", unconfigured: true, composite: true, mode: "only", status: 200, wantCalls: 1, wantAccount: 7},
 		{name: "ordinary_chat_keeps_normal_routing", noTools: true, mode: "only", status: 200, wantCalls: 1, wantAccount: 8},
 		{name: "paused_search_fails_closed", paused: true, mode: "only", status: 200, wantCalls: 0},
 		{name: "restricted_key_keeps_context_guard", restricted: true, mode: "only", status: 200, wantCalls: 0},
@@ -46,6 +49,13 @@ func TestOpenAIMessagesWebSearchDedicatedAccountAndBilling(t *testing.T) {
 				{ID: 8, Platform: service.PlatformOpenAI, Type: service.AccountTypeAPIKey, Status: service.StatusActive, Schedulable: true, GroupIDs: []int64{groupID}, Priority: 1,
 					Credentials: map[string]any{"api_key": "fixture-normal", "base_url": "https://normal.example"}, Extra: map[string]any{"openai_responses_supported": true}},
 			}}
+			if tc.unconfigured {
+				repo.accounts[1].Extra[service.OpenAIWebSearchModeKey] = service.OpenAIWebSearchModeDisabled
+				otherGroup := repo.accounts[0]
+				otherGroup.ID, otherGroup.GroupIDs, otherGroup.Priority = 9, []int64{groupID + 1}, 0
+				otherGroup.Extra = map[string]any{service.OpenAIWebSearchModeKey: service.OpenAIWebSearchModeOnly}
+				repo.accounts = append(repo.accounts, otherGroup)
+			}
 			if tc.paused {
 				repo.accounts[0].Schedulable = false
 			}
@@ -98,7 +108,7 @@ func TestOpenAIMessagesWebSearchDedicatedAccountAndBilling(t *testing.T) {
 			h.Messages(c)
 			require.Len(t, upstream.accountIDs, tc.wantCalls, rec.Body.String())
 			for _, id := range upstream.accountIDs {
-				require.Equal(t, tc.wantAccount, id, "dedicated searches must not fall back to an ordinary account")
+				require.Equal(t, tc.wantAccount, id)
 			}
 			if tc.wantAccount == 7 && tc.status == 200 {
 				require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
@@ -115,6 +125,10 @@ func TestOpenAIMessagesWebSearchDedicatedAccountAndBilling(t *testing.T) {
 				require.Empty(t, usage.rows, "failed searches and retries must not be billed")
 				if tc.restricted {
 					require.Contains(t, rec.Body.String(), "context_length_exceeded")
+				}
+				if tc.unconfigured && tc.wantCalls == 0 {
+					require.Equal(t, http.StatusServiceUnavailable, rec.Code)
+					require.Contains(t, rec.Body.String(), "No available web search accounts in this group")
 				}
 			}
 		})

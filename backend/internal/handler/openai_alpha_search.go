@@ -18,6 +18,13 @@ import (
 	"go.uber.org/zap"
 )
 
+func openAIWebSearchUnavailableMessage(accountID int64) string {
+	if accountID > 0 {
+		return "The configured web search account is currently unavailable"
+	}
+	return "No available web search accounts in this group"
+}
+
 // AlphaSearch proxies the standalone search endpoint used by Codex Responses Lite.
 func (h *OpenAIGatewayHandler) AlphaSearch(c *gin.Context) {
 	streamStarted := false
@@ -170,12 +177,15 @@ func (h *OpenAIGatewayHandler) AlphaSearch(c *gin.Context) {
 			}
 			if len(failedAccountIDs) == 0 {
 				if apiKey.Group.WebSearchAccountID > 0 {
-					h.errorResponse(c, http.StatusServiceUnavailable, "upstream_error", "The configured web search account is currently unavailable")
+					h.errorResponse(c, http.StatusServiceUnavailable, "upstream_error", openAIWebSearchUnavailableMessage(apiKey.Group.WebSearchAccountID))
 					return
 				}
 				cls := classifyNoAccountErrorFromGin(c, h.gatewayService, apiKey, requestedModel, requestedModel, service.PlatformOpenAI)
 				if !cls.ModelNotFound {
 					markOpsRoutingCapacityLimitedIfNoAvailable(c, err)
+					if cls.RetryAt == nil {
+						cls.Message = openAIWebSearchUnavailableMessage(0)
+					}
 				}
 				h.errorResponse(c, cls.Status, cls.ErrType, cls.Message)
 				return

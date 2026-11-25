@@ -1190,8 +1190,8 @@ export default {
       },
       webSearchPricing: {
         account: 'Dedicated web search account',
-        accountDefault: 'Use existing scheduling',
-        accountHint: 'Used by /v1/alpha/search and /v1/messages requests containing only a web search tool. Select an OpenAI account belonging to this group. If unavailable or retries are exhausted, search fails without switching to ordinary model accounts. Leaving it unset preserves existing behavior.',
+        accountDefault: 'Automatically select from this group',
+        accountHint: 'Applies to /v1/alpha/search and /v1/messages requests containing only a web search tool. When unset, search uses an available OpenAI account in this group with web search enabled. When set, only the selected account is used.',
         loadError: 'Could not load search accounts. Reopen settings or search again.',
         title: 'Codex Web Search Pricing',
         pricePerCall: 'Price per search call (USD)',

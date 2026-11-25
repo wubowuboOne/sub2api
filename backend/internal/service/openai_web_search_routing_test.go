@@ -248,7 +248,14 @@ func TestOpenAIWebSearchDefaultSchedulingRegression(t *testing.T) {
 				preferred.GroupIDs, other.GroupIDs = []int64{42}, []int64{42}
 				cfg := &config.Config{}
 				cfg.Gateway.OpenAIWS.LBTopK = 1
-				svc := &OpenAIGatewayService{accountRepo: schedulerTestOpenAIAccountRepo{accounts: []Account{preferred, other}},
+				accounts := []Account{preferred, other}
+				if tc.capability == OpenAIEndpointCapabilityAlphaSearch {
+					cfg.RunMode = config.RunModeSimple
+					outOfGroup := webSearchTestAccount(9, OpenAIWebSearchModeOnly)
+					outOfGroup.Priority, outOfGroup.GroupIDs = -10, []int64{43}
+					accounts = append(accounts, outOfGroup)
+				}
+				svc := &OpenAIGatewayService{accountRepo: schedulerTestOpenAIAccountRepo{accounts: accounts},
 					cache: &schedulerTestGatewayCache{}, cfg: cfg,
 					rateLimitService: newOpenAIAdvancedSchedulerRateLimitService(advanced), concurrencyService: NewConcurrencyService(schedulerTestConcurrencyCache{})}
 				ctx := WithOpenAIWebSearchRouting(context.Background(), tc.binding, "gpt-test")

@@ -1774,10 +1774,9 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 
 	subscription, _ := middleware2.GetSubscriptionFromContext(c)
 	requestPlatform := openAICompatibleRequestPlatform(c.Request.Context(), apiKey)
-	dedicatedWebSearch := requestPlatform == service.PlatformOpenAI && apiKey.Group != nil &&
-		apiKey.Group.WebSearchAccountID > 0 && service.IsOpenAIMessagesWebSearchRequest(body)
+	messagesWebSearch := requestPlatform == service.PlatformOpenAI && apiKey.Group != nil && service.IsOpenAIMessagesWebSearchRequest(body)
 	messagesCapability := service.OpenAIEndpointCapabilityChatCompletions
-	if dedicatedWebSearch {
+	if messagesWebSearch {
 		messagesCapability = service.OpenAIEndpointCapabilityAlphaSearch
 	}
 
@@ -1804,7 +1803,7 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 
 	// 余额模式在途预留（与计费同口径估算；计费任务扣减余额缓存后才释放）。
 	messagesEstimate := tokenInflightEstimate(reqModel, body)
-	if dedicatedWebSearch {
+	if messagesWebSearch {
 		messagesEstimate = service.InflightEstimateRequest{Model: reqModel, Kind: service.InflightEstimatePerRequest, SearchCalls: 1}
 	}
 	inflightDone, inflightErr := reserveInflightBalance(c, h.billingCacheService, h.gatewayService, apiKey, subscription, messagesEstimate)
@@ -1851,7 +1850,7 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 		}
 		reqLog.Debug("openai_messages.account_selecting", zap.Int("excluded_account_count", len(failedAccountIDs)))
 		c.Request = c.Request.WithContext(service.WithOpenAIForwardModel(c.Request.Context(), currentRoutingModel, false))
-		if dedicatedWebSearch {
+		if messagesWebSearch {
 			c.Request = c.Request.WithContext(service.WithOpenAIMessagesWebSearch(c.Request.Context(), apiKey.Group.WebSearchAccountID, currentRoutingModel))
 		}
 		selection, scheduleDecision, err := h.gatewayService.SelectAccountWithSchedulerForCapability(
@@ -1865,10 +1864,10 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 			messagesCapability,
 			false,
 			false,
-			!dedicatedWebSearch,
+			!messagesWebSearch,
 			requestPlatform,
 		)
-		if err != nil {
+		if err != nil || (messagesWebSearch && (selection == nil || selection.Account == nil)) {
 			if errors.Is(err, service.ErrPriorityLatencyUnavailable) {
 				h.handleTurnAdmissionError(c, err, streamStarted)
 				return
@@ -1890,8 +1889,9 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 				zap.Int("excluded_account_count", len(failedAccountIDs)),
 			)
 			if len(failedAccountIDs) == 0 {
-				if dedicatedWebSearch {
-					h.anthropicStreamingAwareError(c, http.StatusServiceUnavailable, "api_error", "The configured web search account is currently unavailable", streamStarted)
+				if messagesWebSearch {
+					markOpsRoutingCapacityLimitedIfNoAvailable(c, err)
+					h.anthropicStreamingAwareError(c, http.StatusServiceUnavailable, "api_error", openAIWebSearchUnavailableMessage(apiKey.Group.WebSearchAccountID), streamStarted)
 					return
 				}
 				if err != nil {

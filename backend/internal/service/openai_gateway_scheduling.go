@@ -403,6 +403,10 @@ func openAICompatibleAccountEligibilityFailureReasonBeforeProfit(ctx context.Con
 	if account == nil {
 		return "account_nil"
 	}
+	// Search is group-scoped even when simple mode lists accounts globally.
+	if requiredCapability == OpenAIEndpointCapabilityAlphaSearch && groupID != nil && !openAIStickyAccountMatchesGroup(account, groupID) {
+		return "group_mismatch"
+	}
 	// account_model composite routes publish an alias that only accounts with an
 	// explicit model mapping own. Both scheduler modes (advanced and legacy) must
 	// enforce ownership before any priority/sticky/transport consideration; a

@@ -1187,8 +1187,8 @@ export default {
       },
       webSearchPricing: {
         account: '专用网页搜索账号',
-        accountDefault: '不指定，使用现有调度',
-        accountHint: '用于 /v1/alpha/search 和 /v1/messages 中仅含网页搜索工具的请求。请选择已加入本分组的 OpenAI 账号；不可用或重试耗尽时返回搜索失败，不切换至普通对话账号。未指定时保持现有行为。',
+        accountDefault: '不指定，从本分组自动选择',
+        accountHint: '用于 /v1/alpha/search 和 /v1/messages 中仅含网页搜索工具的请求。未指定时，从本分组内已启用网页搜索的可用 OpenAI 账号中选择；指定后只使用所选账号。',
         loadError: '搜索账号加载失败，请重新打开设置或搜索重试',
         title: 'Codex 网页搜索计费',
         pricePerCall: '搜索单次价格（USD/次）',

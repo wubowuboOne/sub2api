@@ -2407,6 +2407,9 @@ func (s *defaultOpenAIAccountScheduler) isAccountRequestCompatibleReason(ctx con
 	if account == nil {
 		return false, "account_nil"
 	}
+	if req.RequiredCapability == OpenAIEndpointCapabilityAlphaSearch && req.GroupID != nil && !openAIStickyAccountMatchesGroup(account, req.GroupID) {
+		return false, "group_mismatch"
+	}
 	if s != nil && s.service != nil && !s.service.openAI409AccountRouteSupported(ctx, account, req.RequestedModel) {
 		return false, "readable_rebuild_route_unsupported"
 	}
